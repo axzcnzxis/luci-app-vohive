@@ -37,8 +37,8 @@ jobs:
             tag_name="${GITHUB_REF_NAME}"
             luci_version="${GITHUB_REF_NAME#v}"
           else
-            tag_name="v0.0.0-dev"
-            luci_version="0.0.0-dev"
+            tag_name="${VOHIVE_VERSION}"
+            luci_version="${VOHIVE_VERSION#v}"
           fi
 
           previous_tag="$(git tag --sort=-v:refname --merged HEAD | grep -v "^${tag_name}$" | head -n 1 || true)"
@@ -231,7 +231,6 @@ jobs:
     needs:
       - prepare
       - build
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
