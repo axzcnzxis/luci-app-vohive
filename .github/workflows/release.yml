@@ -58,9 +58,9 @@ jobs:
             echo "### 安装包说明"
             echo
             echo "- luci-app-vohive: LuCI 管理页面，不包含 VoHive core。安装后可在页面下载/安装核心。"
-            echo "- vohive-core-arm64: 仅包含 vohive_${VOHIVE_VERSION}_linux_arm64 core。"
             echo "- vohive-core-amd64: 仅包含 vohive_${VOHIVE_VERSION}_linux_amd64 core。"
-            echo "- vohive-core-armv7: 仅包含 vohive_${VOHIVE_VERSION}_linux_armv7 core。"
+            # echo "- vohive-core-arm64: 仅包含 vohive_${VOHIVE_VERSION}_linux_arm64 core。"
+            # echo "- vohive-core-armv7: 仅包含 vohive_${VOHIVE_VERSION}_linux_armv7 core。"
             echo
             echo "### 包格式"
             echo
@@ -69,9 +69,9 @@ jobs:
             echo
             echo "### 架构选择"
             echo
-            echo "- aarch64 / arm64 路由器选择 arm64"
             echo "- x86_64 / amd64 设备选择 amd64"
-            echo "- armv7l / armv7 设备选择 armv7"
+            # echo "- aarch64 / arm64 路由器选择 arm64"
+            # echo "- armv7l / armv7 设备选择 armv7"
             echo
             if [ -n "$previous_tag" ]; then
               echo "完整对比: https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${tag_name}"
@@ -126,7 +126,9 @@ jobs:
         run: |
           set -eu
           mkdir -p source/vohive-core/files
-          for arch in arm64 amd64 armv7; do
+          
+          # 【未来更新指南】如果以后需要编译 ARM，只需将下面这行改为：for arch in amd64 arm64 armv7; do
+          for arch in amd64; do
             if [ "$arch" = "amd64" ]; then
               asset="vohive_${VOHIVE_VERSION}_linux_${arch}"
               url="https://github.com/axzcnzxis/luci-app-vohive/releases/download/${VOHIVE_VERSION}/${asset}"
@@ -172,9 +174,11 @@ jobs:
           CONFIG_ALL=n
           CONFIG_AUTOREMOVE=n
           CONFIG_PACKAGE_luci-app-vohive=m
-          CONFIG_PACKAGE_vohive-core-arm64=m
           CONFIG_PACKAGE_vohive-core-amd64=m
-          CONFIG_PACKAGE_vohive-core-armv7=m
+          
+          # 【未来更新指南】删除下面的 # 号即可恢复打包对应的 ARM 架构
+          # CONFIG_PACKAGE_vohive-core-arm64=m
+          # CONFIG_PACKAGE_vohive-core-armv7=m
           EOF
           make defconfig
           make clean
