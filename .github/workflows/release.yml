@@ -276,7 +276,13 @@ jobs:
             tmpdir="$(mktemp -d)"
 
             if [ "${PACKAGE_EXT}" = "ipk" ]; then
-              ( cd "$tmpdir" && ar x "$pkg" )
+              # OpenWrt 24.10 emits IPKs as gzip-compressed tar archives,
+              # while older SDKs use the traditional ar container.
+              if tar -tf "$pkg" >/dev/null 2>&1; then
+                tar -xf "$pkg" -C "$tmpdir"
+              else
+                ( cd "$tmpdir" && ar x "$pkg" )
+              fi
               data_archive="$(find "$tmpdir" -maxdepth 1 -name 'data.tar.*' | head -n 1)"
               if [ -z "$data_archive" ]; then
                 echo "$pkg: no data.tar.* member found" >&2
@@ -294,7 +300,7 @@ jobs:
                 echo "Host apk tool not found at $apk_tool" >&2
                 exit 1
               fi
-              "$apk_tool" extract --destination "$tmpdir" "$pkg"
+              "$apk_tool" --allow-untrusted extract --destination "$tmpdir" "$pkg"
             fi
 
             core_bin="$tmpdir/etc/vohive/bin/vohive"
