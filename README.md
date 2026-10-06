@@ -1,11 +1,20 @@
 # luci-app-vohive
 
-VoHive 的 OpenWrt / ImmortalWrt LuCI 管理插件。
+VoHive 的 OpenWrt / ImmortalWrt LuCI 管理插件。当前仓库是原项目失效后的维护 fork，Release、核心下载和插件更新均从本仓库获取。
+
+## 当前状态
+
+- 默认 Release 仓库：`https://github.com/axzcnzxis/luci-app-vohive`
+- 当前核心版本：`v1.5.4`
+- 当前插件版本：`0.1.19`
+- 当前只发布 `x86_64` / `amd64` 核心包，因为 fork 中没有可用的 ARM 二进制文件。
+- 核心和插件安装包下载后会校验 GitHub asset digest 或 Release 中的 `sha256sums.txt`。
+- 插件更新同时支持 OpenWrt 24.10 的 `opkg` 和 OpenWrt 25.12 的 `apk`。
 
 ## 包结构
 
-- `luci-app-vohive`: LuCI 页面、UCI 配置、procd 服务、核心下载与回滚脚本，不包含 VoHive 二进制。
-- `vohive-core-arm64` / `vohive-core-amd64` / `vohive-core-armv7`: 只预置对应架构的 VoHive 二进制和版本文件。
+- `luci-app-vohive`：LuCI 页面、UCI 配置、procd 服务、核心下载与回滚脚本，不包含 VoHive 二进制。
+- `vohive-core-amd64`：预置 `vohive_v1.5.4_linux_amd64` 二进制和版本文件。
 
 默认路径：
 
@@ -21,80 +30,78 @@ VoHive 的 OpenWrt / ImmortalWrt LuCI 管理插件。
 /tmp/vohive/tasks
 ```
 
-默认 Release 仓库地址：
-
-```text
-https://github.com/iniwex5/vohive-release
-```
-
 ## 功能
 
-- 在 `服务 -> VoHive` 管理核心安装、更新、回滚。
-- 核心管理页会从 GitHub Release 列出最近版本，显示当前版本和最新版本。
-- 核心安装、核心回滚和 LuCI 插件更新使用任务弹窗显示下载进度、已下载大小、总大小和下载速度。
+- 在 `服务 -> VoHive` 管理核心安装、更新和回滚。
+- 从本仓库的 GitHub Release 列出可用版本，并显示当前版本与最新版本。
+- 核心安装、核心回滚和 LuCI 插件更新使用任务弹窗显示下载进度、大小和速度。
 - 启动、停止、重启 VoHive procd 服务。
 - 通过 UCI 配置渲染 `/etc/vohive/config/config.yaml`。
-- 显示核心状态、服务状态、端口监听提示和最近日志。核心版本和架构来自安装脚本或 `vohive-core-*` 写入的 `/etc/vohive/bin/version` 与 `/etc/vohive/bin/arch`。
-- 核心回滚只保留上一个版本和架构元数据，回滚时重新下载旧版本 core，不在闪存中保存第二份完整二进制。
+- 显示核心状态、服务状态、端口监听提示和最近日志。
+- 核心回滚只保留上一个版本和架构元数据，回滚时重新下载旧版本核心，不在闪存中保存第二份完整二进制。
 
 ## 安装
 
-从 GitHub Release 下载并安装：
+OpenWrt 24.10 使用 IPK：
 
 ```sh
-opkg install luci-app-vohive_<version>-r1_all.ipk
+opkg install luci-app-vohive_0.1.19-r1_all.ipk
+opkg install luci-app-vohive_0.1.19-r1_all.ipk vohive-core-amd64_1.5.4-r1_all.ipk
 ```
 
-如果需要内置核心：
+OpenWrt 25.12 使用 APK：
 
 ```sh
-opkg install luci-app-vohive_<version>-r1_all.ipk vohive-core-arm64_1.5.4-r1_all.ipk
-opkg install luci-app-vohive_<version>-r1_all.ipk vohive-core-amd64_1.5.4-r1_all.ipk
-opkg install luci-app-vohive_<version>-r1_all.ipk vohive-core-armv7_1.5.4-r1_all.ipk
+apk add --allow-untrusted ./luci-app-vohive-0.1.19-r1.apk
+apk add --allow-untrusted ./luci-app-vohive-0.1.19-r1.apk ./vohive-core-amd64-1.5.4-r1.apk
 ```
 
 也可以只安装 `luci-app-vohive`，进入 LuCI 页面后点击“安装/更新核心”。
 
-架构对应关系：
+当前架构对应关系：
 
 ```text
-aarch64 / arm64 -> arm64
-x86_64 / amd64  -> amd64
-armv7l / armv7  -> armv7
+x86_64 / amd64 -> amd64
 ```
 
 ## 发布构建
 
-推送 `v*` tag 会触发 GitHub Action，用 OpenWrt SDK 标准打包流程生成 `.ipk` 与 `.apk`：
+手动触发 `Release Packages` workflow 时使用以下参数：
+
+```text
+plugin_version: v0.1.19
+core_version: v1.5.4
+core_repo: axzcnzxis/luci-app-vohive
+```
+
+推送新的 `v*` tag 也会触发构建：
 
 ```sh
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.19
+git push origin v0.1.19
 ```
 
 Release 产物：
 
 ```text
-luci-app-vohive_<version>-r1_all.ipk
-vohive-core-arm64_1.5.4-r1_all.ipk
+luci-app-vohive_0.1.19-r1_all.ipk
+luci-app-vohive-0.1.19-r1.apk
 vohive-core-amd64_1.5.4-r1_all.ipk
-vohive-core-armv7_1.5.4-r1_all.ipk
-对应的 OpenWrt 25 apk 包
+vohive-core-amd64-1.5.4-r1.apk
 sha256sums.txt
 ```
+
+构建流程会先从 `core_repo` 的 `core_version` Release 下载 `vohive_v1.5.4_linux_amd64`，并对照 `sha256sums.txt` 校验后再打包。
 
 ## 开发构建
 
 把本仓库作为 OpenWrt SDK 的 package feed 使用，或复制到 SDK 的 `package/` 目录后执行：
 
 ```sh
-make package/vohive/luci-app-vohive/compile V=s PKG_VERSION=0.1.2
+make package/vohive/luci-app-vohive/compile V=s PKG_VERSION=0.1.19
 make package/vohive/vohive-core/compile V=s VOHIVE_VERSION=v1.5.4
 ```
 
-## TODO
+## ARM 说明
 
-- 浏览器上传本地 VoHive 二进制并安装。
-- GitHub 镜像/代理下载配置。
-- SHA256SUMS 强校验。
-- 英文界面与 i18n 语言包。
+代码中保留了 ARM 架构处理路径，但 fork 中没有 `linux_arm64` 或 `linux_armv7` 核心文件，因此默认不构建 ARM 包。只有将对应二进制加入核心 Release 后，才应设置 `VOHIVE_ENABLE_ARM=1` 重新启用 ARM 包。

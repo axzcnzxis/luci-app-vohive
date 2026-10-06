@@ -2,6 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=vohive-core
 VOHIVE_VERSION?=v1.5.4
+VOHIVE_ENABLE_ARM?=0
 PKG_VERSION:=$(patsubst v%,%,$(VOHIVE_VERSION))
 PKG_RELEASE:=1
 PKG_LICENSE:=Proprietary
@@ -17,11 +18,13 @@ define Package/vohive-core/Default
   PKGARCH:=all
 endef
 
+ifeq ($(VOHIVE_ENABLE_ARM),1)
 define Package/vohive-core-arm64
   $(call Package/vohive-core/Default)
   TITLE:=VoHive core binary (arm64)
   CONFLICTS:=vohive-core vohive-core-amd64 vohive-core-armv7
 endef
+endif
 
 define Package/vohive-core-amd64
   $(call Package/vohive-core/Default)
@@ -29,23 +32,29 @@ define Package/vohive-core-amd64
   CONFLICTS:=vohive-core vohive-core-arm64 vohive-core-armv7
 endef
 
+ifeq ($(VOHIVE_ENABLE_ARM),1)
 define Package/vohive-core-armv7
   $(call Package/vohive-core/Default)
   TITLE:=VoHive core binary (armv7)
   CONFLICTS:=vohive-core vohive-core-arm64 vohive-core-amd64
 endef
+endif
 
+ifeq ($(VOHIVE_ENABLE_ARM),1)
 define Package/vohive-core-arm64/description
   Preinstalled VoHive linux_arm64 core binary for luci-app-vohive.
 endef
+endif
 
 define Package/vohive-core-amd64/description
   Preinstalled VoHive linux_amd64 core binary for luci-app-vohive.
 endef
 
+ifeq ($(VOHIVE_ENABLE_ARM),1)
 define Package/vohive-core-armv7/description
   Preinstalled VoHive linux_armv7 core binary for luci-app-vohive.
 endef
+endif
 
 define Build/Compile
 endef
@@ -67,30 +76,42 @@ define Package/vohive-core/postinst
 exit 0
 endef
 
+ifeq ($(VOHIVE_ENABLE_ARM),1)
 define Package/vohive-core-arm64/install
 	$(call Package/vohive-core/install,$(1),arm64)
 endef
+endif
 
 define Package/vohive-core-amd64/install
 	$(call Package/vohive-core/install,$(1),amd64)
 endef
 
+ifeq ($(VOHIVE_ENABLE_ARM),1)
 define Package/vohive-core-armv7/install
 	$(call Package/vohive-core/install,$(1),armv7)
 endef
+endif
 
+ifeq ($(VOHIVE_ENABLE_ARM),1)
 define Package/vohive-core-arm64/postinst
 $(Package/vohive-core/postinst)
 endef
+endif
 
 define Package/vohive-core-amd64/postinst
 $(Package/vohive-core/postinst)
 endef
 
+ifeq ($(VOHIVE_ENABLE_ARM),1)
 define Package/vohive-core-armv7/postinst
 $(Package/vohive-core/postinst)
 endef
+endif
 
+ifeq ($(VOHIVE_ENABLE_ARM),1)
 $(eval $(call BuildPackage,vohive-core-arm64))
+endif
 $(eval $(call BuildPackage,vohive-core-amd64))
+ifeq ($(VOHIVE_ENABLE_ARM),1)
 $(eval $(call BuildPackage,vohive-core-armv7))
+endif

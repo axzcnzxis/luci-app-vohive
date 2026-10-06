@@ -16,7 +16,7 @@ ARCH_FILE="$BIN_DIR/arch"
 BACKUP_ARCH_FILE="$BIN_DIR/arch.bak"
 TEMP_BACKUP="$DOWNLOAD_DIR/vohive.prev"
 TEMP_CURRENT="$DOWNLOAD_DIR/vohive.current"
-PLUGIN_REPO="Demogorgon314/luci-app-vohive"
+PLUGIN_REPO="${DEFAULT_PLUGIN_REPO}"
 
 [ -n "$id" ] || exit 1
 [ -n "$type" ] || exit 1
@@ -35,9 +35,35 @@ release_json_for_version() {
 	local version="$2"
 
 	if [ "$version" = "latest" ] || [ "$version" = "stable" ]; then
-		curl -fsSL --show-error --connect-timeout 15 --retry 2 "https://api.github.com/repos/$repo/releases/latest"
+		curl -fsSL --show-error --connect-timeout 15 --retry 2 "https://api.github.com/repos/$repo/releases?per_page=20"
 	else
 		curl -fsSL --show-error --connect-timeout 15 --retry 2 "https://api.github.com/repos/$repo/releases/tags/$version"
+	fi
+}
+
+verify_release_asset() {
+	local release_json="$1"
+	local asset="$2"
+	local file="$3"
+	local repo="$4"
+	local tag="$5"
+	local digest sums
+
+	digest="$(release_asset_field "$release_json" "$asset" digest 2>/dev/null || true)"
+	if [ -n "$digest" ]; then
+		if ! verify_sha256_digest "$file" "$digest"; then
+			rm -f "$file"
+			fail "SHA256 校验失败: $asset"
+		fi
+		return 0
+	fi
+
+	sums="$DOWNLOAD_DIR/sha256sums.txt"
+	rm -f "$sums"
+	task_download "$id" "$type" "https://github.com/$repo/releases/download/$tag/sha256sums.txt" "$sums" "sha256sums.txt" "$(task_asset_size "$release_json" "sha256sums.txt")"
+	if ! verify_sha256sums_file "$file" "$sums" "$asset"; then
+		rm -f "$file" "$sums"
+		fail "SHA256 校验失败: $asset"
 	fi
 }
 
@@ -48,7 +74,7 @@ install_core() {
 	if [ -n "$repo_input" ]; then
 		repo="$(github_repo_slug "$repo_input")"
 	else
-		repo="$(github_repo_slug "$(uci_get release_repo 'https://github.com/iniwex5/vohive-release')")"
+		repo="$(github_repo_slug "$(uci_get release_repo "https://github.com/${DEFAULT_RELEASE_REPO}")")"
 	fi
 	validate_github_repo "$repo" || fail "Invalid GitHub repository: $repo"
 
@@ -72,10 +98,16 @@ install_core() {
 	task_log "$id" "查询 VoHive Release"
 	task_write_status "$id" "$type" "running" "prepare" "正在查询 VoHive Release" "" 0 0 0 0
 	release_json="$(release_json_for_version "$repo" "$version")" || fail "Failed to query release"
-	version="$(printf '%s' "$release_json" | jsonfilter -e '@.tag_name' 2>/dev/null || true)"
-	[ -n "$version" ] || fail "Failed to parse release"
+	if [ "$version" = "latest" ] || [ "$version" = "stable" ]; then
+		version="$(find_core_release_tag "$release_json" "$asset_arch" 20)" || fail "未找到包含 linux_${asset_arch} 核心的 Release"
+		release_json="$(release_json_for_version "$repo" "$version")" || fail "Failed to query release $version"
+	else
+		version="$(printf '%s' "$release_json" | jsonfilter -e '@.tag_name' 2>/dev/null || true)"
+		[ -n "$version" ] || fail "Failed to parse release"
+	fi
 
-	asset="vohive_${version}_linux_${asset_arch}"
+	asset="$(core_asset_name "$version" "$asset_arch")"
+	release_asset_present "$release_json" "$asset" || fail "Release $version 中未找到 $asset"
 	url="https://github.com/$repo/releases/download/$version/$asset"
 	downloaded="$DOWNLOAD_DIR/$asset"
 	total="$(task_asset_size "$release_json" "$asset")"
@@ -87,6 +119,7 @@ install_core() {
 
 	task_log "$id" "校验核心文件"
 	task_write_status "$id" "$type" "running" "verify" "正在校验核心文件" "$asset" "$(wc -c < "$downloaded" 2>/dev/null || echo 0)" "$total" 0 0
+	verify_release_asset "$release_json" "$asset" "$downloaded" "$repo" "$version"
 	chmod +x "$downloaded"
 	if command -v file >/dev/null 2>&1; then
 		file "$downloaded" | grep -Eq 'ELF|executable' || {
@@ -139,7 +172,7 @@ install_core() {
 rollback_core() {
 	local repo rollback_version rollback_arch asset url downloaded total release_json was_running current_version current_arch
 
-	repo="$(github_repo_slug "$(uci_get release_repo 'https://github.com/iniwex5/vohive-release')")"
+	repo="$(github_repo_slug "$(uci_get release_repo "https://github.com/${DEFAULT_RELEASE_REPO}")")"
 	validate_github_repo "$repo" || fail "Invalid GitHub repository: $repo"
 
 	rollback_version="$(cat "$BACKUP_VERSION_FILE" 2>/dev/null || true)"
@@ -154,7 +187,8 @@ rollback_core() {
 	task_write_status "$id" "$type" "running" "prepare" "正在查询回滚版本" "" 0 0 0 0
 	release_json="$(release_json_for_version "$repo" "$rollback_version")" || fail "Failed to query rollback release"
 
-	asset="vohive_${rollback_version}_linux_${rollback_arch}"
+	asset="$(core_asset_name "$rollback_version" "$rollback_arch")"
+	release_asset_present "$release_json" "$asset" || fail "Release $rollback_version 中未找到 $asset"
 	url="https://github.com/$repo/releases/download/$rollback_version/$asset"
 	downloaded="$DOWNLOAD_DIR/$asset"
 	total="$(task_asset_size "$release_json" "$asset")"
@@ -168,6 +202,7 @@ rollback_core() {
 
 	task_log "$id" "校验回滚核心文件"
 	task_write_status "$id" "$type" "running" "verify" "正在校验回滚核心文件" "$asset" "$(wc -c < "$downloaded" 2>/dev/null || echo 0)" "$total" 0 0
+	verify_release_asset "$release_json" "$asset" "$downloaded" "$repo" "$rollback_version"
 	chmod +x "$downloaded"
 	if command -v file >/dev/null 2>&1; then
 		file "$downloaded" | grep -Eq 'ELF|executable' || {
@@ -207,87 +242,54 @@ rollback_core() {
 }
 
 update_plugin() {
-	local json tag tag_norm asset asset_any i name base ipk sums total expected actual installed_version installed_norm msg
+	local json selection tag asset asset_version base package_file total manager installed_version installed_norm msg
 
 	command -v curl >/dev/null 2>&1 || fail "缺少命令: curl"
 	command -v jsonfilter >/dev/null 2>&1 || fail "缺少命令: jsonfilter"
-	command -v opkg >/dev/null 2>&1 || fail "缺少命令: opkg"
 	command -v sha256sum >/dev/null 2>&1 || fail "缺少命令: sha256sum"
+	manager="$(package_manager)" || fail "未找到 opkg 或 apk"
 
 	tmp_avail="$(df -kP /tmp 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)"
 	[ "${tmp_avail:-0}" -ge 2048 ] || fail "/tmp 临时空间不足，至少需要 2 MB"
 
 	task_log "$id" "查询 LuCI 插件最新版本"
 	task_write_status "$id" "$type" "running" "prepare" "正在查询 LuCI 插件最新版本" "" 0 0 0 0
-	json="$(curl -fsSL --show-error --connect-timeout 15 --retry 2 "https://api.github.com/repos/$PLUGIN_REPO/releases/latest")" || fail "查询插件最新版本失败"
-	tag="$(printf '%s' "$json" | jsonfilter -e '@.tag_name' 2>/dev/null || true)"
-	[ -n "$tag" ] || fail "无法解析插件最新版本"
-	tag_norm="${tag#v}"
-
-	asset=""
-	asset_any=""
-	i=0
-	while :; do
-		name="$(printf '%s' "$json" | jsonfilter -e "@.assets[$i].name" 2>/dev/null || true)"
-		[ -n "$name" ] || break
-		case "$name" in
-			luci-app-vohive_*_all.ipk)
-				asset="$name"
-				break
-				;;
-			luci-app-vohive_*_*.ipk)
-				[ -n "$asset_any" ] || asset_any="$name"
-				;;
-		esac
-		i=$((i + 1))
-	done
-	[ -n "$asset" ] || asset="$asset_any"
-	[ -n "$asset" ] || fail "最新 Release 未找到 luci-app-vohive_*.ipk"
+	json="$(curl -fsSL --show-error --connect-timeout 15 --retry 2 "https://api.github.com/repos/$PLUGIN_REPO/releases?per_page=20")" || fail "查询插件最新版本失败"
+	selection="$(find_plugin_release_asset "$json" "$manager" 20)" || fail "未找到适用于 $manager 的 LuCI 插件安装包"
+	tag="${selection%% *}"
+	asset="${selection#* }"
+	asset_version="$(plugin_asset_version "$asset")" || fail "无法解析插件安装包版本: $asset"
+	json="$(release_json_for_version "$PLUGIN_REPO" "$tag")" || fail "查询插件 Release $tag 失败"
 
 	base="https://github.com/$PLUGIN_REPO/releases/download/$tag"
-	ipk="$DOWNLOAD_DIR/$asset"
-	sums="$DOWNLOAD_DIR/sha256sums.txt"
+	package_file="$DOWNLOAD_DIR/$asset"
 	total="$(task_asset_size "$json" "$asset")"
 
-	rm -f "$ipk" "$sums"
-	task_download "$id" "$type" "$base/$asset" "$ipk" "$asset" "$total"
-	task_download "$id" "$type" "$base/sha256sums.txt" "$sums" "sha256sums.txt" "$(task_asset_size "$json" "sha256sums.txt")"
-
-	[ -s "$ipk" ] || fail "插件安装包为空"
-	[ -s "$sums" ] || fail "sha256sums.txt 为空"
+	rm -f "$package_file"
+	task_download "$id" "$type" "$base/$asset" "$package_file" "$asset" "$total"
+	[ -s "$package_file" ] || fail "插件安装包为空"
 
 	task_log "$id" "校验插件安装包"
-	task_write_status "$id" "$type" "running" "verify" "正在校验插件安装包" "$asset" "$(wc -c < "$ipk" 2>/dev/null || echo 0)" "$total" 0 0
-	expected="$(awk -v f="$asset" '$2 == f {print $1}' "$sums" | head -n 1)"
-	[ -n "$expected" ] || {
-		rm -f "$ipk" "$sums"
-		fail "sha256sums.txt 中未找到 $asset"
-	}
-	actual="$(sha256sum "$ipk" | awk '{print $1}')"
-	[ "$actual" = "$expected" ] || {
-		rm -f "$ipk" "$sums"
-		fail "SHA256 校验失败"
-	}
+	task_write_status "$id" "$type" "running" "verify" "正在校验插件安装包" "$asset" "$(wc -c < "$package_file" 2>/dev/null || echo 0)" "$total" 0 0
+	verify_release_asset "$json" "$asset" "$package_file" "$PLUGIN_REPO" "$tag"
 
 	task_log "$id" "安装 LuCI 插件"
 	task_write_status "$id" "$type" "running" "install" "正在安装 LuCI 插件" "" 0 0 0 0
-	opkg install "$ipk" >/tmp/vohive-plugin-opkg.log 2>&1 || {
-		msg="$(tail -n 20 /tmp/vohive-plugin-opkg.log 2>/dev/null || true)"
+	install_package_file "$package_file" >/tmp/vohive-plugin-install.log 2>&1 || {
+		msg="$(tail -n 20 /tmp/vohive-plugin-install.log 2>/dev/null || true)"
 		fail "安装 LuCI 插件失败: $msg"
 	}
 
-	installed_version="$(opkg status luci-app-vohive 2>/dev/null | awk '/^Version:/ {print $2; exit}' || true)"
-	installed_norm="${installed_version#v}"
-	installed_norm="${installed_norm%-r*}"
-	installed_norm="${installed_norm%-[0-9]*}"
-	[ "$installed_norm" = "$tag_norm" ] || {
-		msg="$(tail -n 20 /tmp/vohive-plugin-opkg.log 2>/dev/null || true)"
-		fail "安装后版本仍为 ${installed_version:-unknown}，期望 $tag。$msg"
+	installed_version="$(installed_plugin_version 2>/dev/null || true)"
+	installed_norm="$(normalize_plugin_version "$installed_version" 2>/dev/null || true)"
+	[ "$installed_norm" = "$asset_version" ] || {
+		msg="$(tail -n 20 /tmp/vohive-plugin-install.log 2>/dev/null || true)"
+		fail "安装后版本仍为 ${installed_version:-unknown}，期望 $asset_version。$msg"
 	}
 
-	printf '%s\n' "$tag_norm" > /usr/share/vohive/plugin_version 2>/dev/null || true
+	printf '%s\n' "$asset_version" > /usr/share/vohive/plugin_version 2>/dev/null || true
 	rm -rf /tmp/luci-indexcache /tmp/luci-modulecache
-	finish_ok "LuCI 插件已更新到 $tag，页面即将刷新。"
+	finish_ok "LuCI 插件已更新到 $asset_version（Release $tag），页面即将刷新。"
 }
 
 convert_identity() {

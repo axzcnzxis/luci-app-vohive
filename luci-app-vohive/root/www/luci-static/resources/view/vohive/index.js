@@ -94,7 +94,7 @@ function statusBadge(active) {
 }
 
 function releaseRepoSlug(repo) {
-	return (repo || 'https://github.com/iniwex5/vohive-release')
+	return (repo || 'https://github.com/axzcnzxis/luci-app-vohive')
 		.replace(/^https?:\/\/github\.com\//, '')
 		.replace(/^git@github\.com:/, '')
 		.replace(/\/$/, '')
@@ -112,11 +112,13 @@ function releaseLink(repo, version) {
 	}, version);
 }
 
-function pluginVersionLink(repo, version) {
-	if (/^[0-9]/.test(version || ''))
-		return releaseLink(repo, 'v' + version);
+function pluginVersionLink(repo, releaseVersion, displayVersion) {
+	var target = releaseVersion || displayVersion || '';
 
-	return releaseLink(repo, version);
+	if (/^[0-9]/.test(target))
+		target = 'v' + target;
+
+	return releaseLink(repo, target);
 }
 
 function coreArchLabel(arch) {
@@ -439,19 +441,17 @@ return view.extend({
 		s.addremove = false;
 
 		o = s.option(form.Value, 'release_repo', _('Release 仓库地址'));
-		o.default = 'https://github.com/iniwex5/vohive-release';
+		o.default = 'https://github.com/axzcnzxis/luci-app-vohive';
 		o.validate = function(section_id, value) {
 			return /^(https?:\/\/github\.com\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(value) || _('必须是 GitHub 仓库地址');
 		};
 
 		o = s.option(form.ListValue, 'core_arch', _('核心架构'));
-		o.value('arm64', 'linux_arm64');
 		o.value('amd64', 'linux_amd64');
-		o.value('armv7', 'linux_armv7');
-		o.default = status.core_arch_effective || 'arm64';
+		o.default = 'amd64';
 		o.cfgvalue = function(section_id) {
 			var value = uci.get('vohive', section_id, 'core_arch');
-			return value || status.core_arch_effective || 'arm64';
+			return value || 'amd64';
 		};
 
 		o = s.option(form.ListValue, 'version', _('指定版本'));
@@ -466,7 +466,7 @@ return view.extend({
 		o.onclick = ui.createHandlerFn(this, function() {
 			return m.save().then(function() {
 				var version = uci.get('vohive', 'main', 'version') || 'latest';
-				var repo = uci.get('vohive', 'main', 'release_repo') || 'https://github.com/iniwex5/vohive-release';
+				var repo = uci.get('vohive', 'main', 'release_repo') || 'https://github.com/axzcnzxis/luci-app-vohive';
 				var arch = uci.get('vohive', 'main', 'core_arch') || '';
 				return this.startTask('install_core', [ version, repo, arch ]);
 			}.bind(this));
@@ -518,9 +518,9 @@ return view.extend({
 	},
 
 	renderPluginSummary: function(plugin, refreshHandler) {
-		var repo = plugin.repo || 'Demogorgon314/luci-app-vohive';
+		var repo = plugin.repo || 'axzcnzxis/luci-app-vohive';
 		var current = plugin.current || _('未知');
-		var latest = plugin.loading ? loadingText(_('正在加载...')) : pluginVersionLink(repo, plugin.latest || _('未知'));
+		var latest = plugin.loading ? loadingText(_('正在加载...')) : pluginVersionLink(repo, plugin.latest_release || plugin.latest, plugin.latest || _('未知'));
 		if (!plugin.loading && plugin.latest && plugin.ok !== false)
 			latest = E('span', {}, [
 				latest,
@@ -594,14 +594,14 @@ return view.extend({
 		pluginPane.setAttribute('data-loading', 'true');
 		dom.content(pluginPane, this.renderPluginSummary({
 			loading: true,
-			repo: 'Demogorgon314/luci-app-vohive',
+			repo: 'axzcnzxis/luci-app-vohive',
 			current: _('未知'),
 			versions: []
 		}, refreshHandler));
 
 		return fs.exec_direct('/usr/share/vohive/plugin_status.sh', [ '5' ])
 			.catch(function(e) {
-				return JSON.stringify({ ok: false, repo: 'Demogorgon314/luci-app-vohive', current: _('未知'), message: e.message || String(e), latest: '', has_update: false, versions: [] });
+				return JSON.stringify({ ok: false, repo: 'axzcnzxis/luci-app-vohive', current: _('未知'), message: e.message || String(e), latest: '', latest_release: '', has_update: false, versions: [] });
 			})
 			.then(function(text) {
 				var plugin = parseJson(text);
@@ -759,13 +759,13 @@ return view.extend({
 				data.serial_driver_installed && data.option_driver_installed ? '' : E('button', {
 					'class': 'btn cbi-button cbi-button-action',
 					'click': ui.createHandlerFn(this, function() {
-						return this.runDeviceTool(devicePane, [ 'install_serial_drivers' ], _('确认安装串口驱动吗？\n\n这会执行 opkg update && opkg install kmod-usb-serial kmod-usb-serial-option。\n内核模块包需要匹配当前固件内核版本。'));
+						return this.runDeviceTool(devicePane, [ 'install_serial_drivers' ], _('确认安装串口驱动吗？\n\n这会使用当前系统的 opkg 或 apk 安装 kmod-usb-serial 和 kmod-usb-serial-option。\n内核模块包需要匹配当前固件内核版本。'));
 					})
 				}, _('安装串口驱动')),
 				data.socat_installed ? '' : E('button', {
 					'class': 'btn cbi-button cbi-button-action',
 					'click': ui.createHandlerFn(this, function() {
-						return this.runDeviceTool(devicePane, [ 'install_socat' ], _('确认安装 socat 吗？\n\n这会执行 opkg update && opkg install socat。\n安装包会占用路由器存储空间，需要可用网络。'));
+						return this.runDeviceTool(devicePane, [ 'install_socat' ], _('确认安装 socat 吗？\n\n这会使用当前系统的 opkg 或 apk 安装 socat。\n安装包会占用路由器存储空间，需要可用网络。'));
 					})
 				}, _('安装 socat'))
 			])

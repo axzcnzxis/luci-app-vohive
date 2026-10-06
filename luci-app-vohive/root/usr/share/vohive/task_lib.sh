@@ -40,18 +40,22 @@ task_log() {
 
 task_log_json() {
 	local log_file="$1"
-	local first=1 line
+	local first=1 line lines
 
 	printf '['
 	if [ -f "$log_file" ]; then
-		tail -n 20 "$log_file" | while IFS= read -r line; do
+		lines="$(tail -n 20 "$log_file" 2>/dev/null || true)"
+		while IFS= read -r line; do
+			[ -n "$line" ] || continue
 			if [ "$first" = 1 ]; then
 				first=0
 			else
 				printf ','
 			fi
 			printf '"%s"' "$(json_escape "$line")"
-		done
+		done <<EOF
+$lines
+EOF
 	fi
 	printf ']'
 }
@@ -80,7 +84,7 @@ task_write_status() {
 	if [ -f "$status_file" ] && [ "${speed:-0}" = 0 ]; then
 		prev_file="$(jsonfilter -i "$status_file" -e '@.file' 2>/dev/null || true)"
 		prev_speed="$(jsonfilter -i "$status_file" -e '@.speed_bps' 2>/dev/null || true)"
-		if [ "${prev_speed:-0}" -gt 0 ] 2>/dev/null && { [ "$stage" != "download" ] || [ -n "$file" ] && [ "$file" = "$prev_file" ]; }; then
+		if [ "${prev_speed:-0}" -gt 0 ] 2>/dev/null && { [ "$stage" != "download" ] || { [ -n "$file" ] && [ "$file" = "$prev_file" ]; }; }; then
 			speed="$prev_speed"
 		fi
 	fi
@@ -152,6 +156,37 @@ task_finish() {
 task_fail() {
 	task_finish "$1" "$2" 0 "$3"
 	exit 1
+}
+
+task_run_sync() {
+	local type="$1"
+	shift
+	local id output status_file ok message rc
+
+	task_mkdirs
+	id="manual-$(date +%s)-$$"
+	output="/tmp/vohive/task-$id.out"
+	status_file="$(task_status_file "$id")"
+
+	if /usr/share/vohive/task_worker.sh "$id" "$type" "$@" >"$output" 2>&1; then
+		rc=0
+	else
+		rc=$?
+	fi
+
+	ok="$(jsonfilter -i "$status_file" -e '@.result.ok' 2>/dev/null || true)"
+	message="$(jsonfilter -i "$status_file" -e '@.result.message' 2>/dev/null || true)"
+	[ -n "$message" ] || message="$(tail -n 1 "$output" 2>/dev/null || true)"
+	[ -n "$message" ] || message="任务执行失败"
+
+	if [ "$ok" = "true" ] && [ "$rc" -eq 0 ]; then
+		printf '{"ok":true,"message":"%s"}\n' "$(json_escape "$message")"
+	else
+		printf '{"ok":false,"message":"%s"}\n' "$(json_escape "$message")"
+		[ "$rc" -ne 0 ] || rc=1
+	fi
+
+	return "$rc"
 }
 
 task_cancelled() {

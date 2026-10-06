@@ -1,0 +1,11 @@
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.env text eol=lf
+Makefile text eol=lf
+README.md text eol=lf
+luci-app-vohive/root/etc/config/vohive text eol=lf
+luci-app-vohive/root/etc/init.d/vohive text eol=lf
+vohive-core/files/.gitkeep text eol=lf

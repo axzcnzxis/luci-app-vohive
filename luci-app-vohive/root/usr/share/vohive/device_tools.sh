@@ -1,5 +1,7 @@
 #!/bin/sh
 
+. /usr/share/vohive/lib.sh
+
 ACTION="${1:-status}"
 PORT="${2:-}"
 TARGET="${3:-}"
@@ -25,7 +27,21 @@ fail() {
 }
 
 pkg_installed() {
-	opkg status "$1" 2>/dev/null | grep -q '^Status: .* installed'
+	local manager
+
+	manager="$(package_manager 2>/dev/null || true)"
+	case "$manager" in
+		opkg)
+			opkg status "$1" 2>/dev/null | grep -q '^Status: .* installed'
+			;;
+		apk)
+			apk info -e "$1" >/dev/null 2>&1 ||
+				apk list --installed "$1" 2>/dev/null | grep -q "^$1-"
+			;;
+		*)
+			return 1
+			;;
+	esac
 }
 
 dep_value() {
@@ -633,9 +649,20 @@ probe_json() {
 
 install_packages() {
 	local packages="$1"
-	local output
+	local output manager
 
-	output="$(opkg update 2>&1 && opkg install $packages 2>&1)" || {
+	manager="$(package_manager)" || fail "未找到 opkg 或 apk"
+	case "$manager" in
+		opkg)
+			output="$(opkg update 2>&1 && opkg install $packages 2>&1)"
+			;;
+		apk)
+			output="$(apk update 2>&1 && apk add $packages 2>&1)"
+			;;
+		*)
+			fail "不支持的包管理器: $manager"
+			;;
+	esac || {
 		printf '{"ok":false,"message":"安装失败","output":"%s"}\n' "$(json_escape "$output")"
 		exit 1
 	}

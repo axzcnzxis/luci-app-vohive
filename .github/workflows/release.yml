@@ -3,17 +3,27 @@ name: Release Packages
 on:
   workflow_dispatch:
     inputs:
-      vohive_version:
-        description: VoHive release tag
+      plugin_version:
+        description: LuCI plugin release tag
         required: true
-        default: v1.5.0
+        default: v0.1.19
+      core_version:
+        description: VoHive core release tag
+        required: true
+        default: v1.5.4
+      core_repo:
+        description: GitHub repository containing the core release
+        required: true
+        default: axzcnzxis/luci-app-vohive
   push:
     tags:
       - 'v*'
 
 env:
   TZ: Asia/Shanghai
-  VOHIVE_VERSION: ${{ github.event.inputs.vohive_version || 'v1.5.4' }}
+  PLUGIN_VERSION: ${{ github.event.inputs.plugin_version || github.ref_name || 'v0.1.19' }}
+  CORE_VERSION: ${{ github.event.inputs.core_version || 'v1.5.4' }}
+  CORE_REPO: ${{ github.event.inputs.core_repo || 'axzcnzxis/luci-app-vohive' }}
 
 jobs:
   prepare:
@@ -21,7 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.release_meta.outputs.tag_name }}
-      luci_version: ${{ steps.release_meta.outputs.luci_version }}
+      plugin_version: ${{ steps.release_meta.outputs.plugin_version }}
+      core_version: ${{ steps.release_meta.outputs.core_version }}
+      core_repo: ${{ steps.release_meta.outputs.core_repo }}
 
     steps:
       - name: Checkout
@@ -35,16 +47,17 @@ jobs:
           set -eu
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tag_name="${GITHUB_REF_NAME}"
-            luci_version="${GITHUB_REF_NAME#v}"
+            plugin_version="${GITHUB_REF_NAME}"
           else
-            tag_name="${VOHIVE_VERSION}"
-            luci_version="${VOHIVE_VERSION#v}"
+            tag_name="${PLUGIN_VERSION}"
+            plugin_version="${PLUGIN_VERSION}"
           fi
 
+          plugin_norm="${plugin_version#v}"
           previous_tag="$(git tag --sort=-v:refname --merged HEAD | grep -v "^${tag_name}$" | head -n 1 || true)"
 
           {
-            echo "## VoHive LuCI ${luci_version}"
+            echo "## VoHive LuCI ${plugin_norm}"
             echo
             echo "### 更新日志"
             echo
@@ -58,9 +71,7 @@ jobs:
             echo "### 安装包说明"
             echo
             echo "- luci-app-vohive: LuCI 管理页面，不包含 VoHive core。安装后可在页面下载/安装核心。"
-            echo "- vohive-core-amd64: 仅包含 vohive_${VOHIVE_VERSION}_linux_amd64 core。"
-            # echo "- vohive-core-arm64: 仅包含 vohive_${VOHIVE_VERSION}_linux_arm64 core。"
-            # echo "- vohive-core-armv7: 仅包含 vohive_${VOHIVE_VERSION}_linux_armv7 core。"
+            echo "- vohive-core-amd64: 预置 VoHive core ${CORE_VERSION}，来源仓库 ${CORE_REPO}。"
             echo
             echo "### 包格式"
             echo
@@ -69,9 +80,7 @@ jobs:
             echo
             echo "### 架构选择"
             echo
-            echo "- x86_64 / amd64 设备选择 amd64"
-            # echo "- aarch64 / arm64 路由器选择 arm64"
-            # echo "- armv7l / armv7 设备选择 armv7"
+            echo "- 当前只发布 x86_64 / amd64 核心包。"
             echo
             if [ -n "$previous_tag" ]; then
               echo "完整对比: https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${tag_name}"
@@ -79,7 +88,9 @@ jobs:
           } > release-notes.md
 
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
-          echo "luci_version=${luci_version}" >> "$GITHUB_OUTPUT"
+          echo "plugin_version=${plugin_version}" >> "$GITHUB_OUTPUT"
+          echo "core_version=${CORE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "core_repo=${CORE_REPO}" >> "$GITHUB_OUTPUT"
 
       - name: Upload release notes
         uses: actions/upload-artifact@v4
@@ -122,25 +133,26 @@ jobs:
             echo "${key,,}=${value}" >> "$GITHUB_OUTPUT"
           done < "source/.github/workflows/${{ matrix.id }}.env"
 
-      - name: Prepare VoHive core files
+      - name: Download and verify VoHive core
+        env:
+          CORE_VERSION: ${{ needs.prepare.outputs.core_version }}
+          CORE_REPO: ${{ needs.prepare.outputs.core_repo }}
         run: |
           set -eu
           mkdir -p source/vohive-core/files
-          
-          # 【未来更新指南】如果以后需要编译 ARM，只需将下面这行改为：for arch in amd64 arm64 armv7; do
-          for arch in amd64; do
-            if [ "$arch" = "amd64" ]; then
-              asset="vohive_${VOHIVE_VERSION}_linux_${arch}"
-              url="https://github.com/axzcnzxis/luci-app-vohive/releases/download/${VOHIVE_VERSION}/${asset}"
-              echo "Downloading real core for ${arch}..."
-              curl -fL --connect-timeout 20 --retry 3 "$url" -o "source/vohive-core/files/vohive-${arch}"
-            else
-              echo "Creating dummy core for ${arch} bypass..."
-              echo "Dummy core file" > "source/vohive-core/files/vohive-${arch}"
-            fi
-            chmod 0755 "source/vohive-core/files/vohive-${arch}"
-            file "source/vohive-core/files/vohive-${arch}"
-          done
+          arch=amd64
+          asset="vohive_${CORE_VERSION}_linux_${arch}"
+          base="https://github.com/${CORE_REPO}/releases/download/${CORE_VERSION}"
+
+          curl -fL --connect-timeout 20 --retry 3 "$base/$asset" -o "source/vohive-core/files/vohive-${arch}"
+          curl -fL --connect-timeout 20 --retry 3 "$base/sha256sums.txt" -o sha256sums.txt
+
+          expected="$(awk -v f="$asset" '$2 == f || $2 == "*" f {print $1; exit}' sha256sums.txt)"
+          actual="$(sha256sum "source/vohive-core/files/vohive-${arch}" | awk '{print $1}')"
+          [ -n "$expected" ] && [ "$actual" = "$expected" ]
+
+          chmod 0755 "source/vohive-core/files/vohive-${arch}"
+          file "source/vohive-core/files/vohive-${arch}"
 
       - name: Initialize SDK
         env:
@@ -175,27 +187,30 @@ jobs:
           CONFIG_AUTOREMOVE=n
           CONFIG_PACKAGE_luci-app-vohive=m
           CONFIG_PACKAGE_vohive-core-amd64=m
-          
-          # 【未来更新指南】删除下面的 # 号即可恢复打包对应的 ARM 架构
-          # CONFIG_PACKAGE_vohive-core-arm64=m
-          # CONFIG_PACKAGE_vohive-core-armv7=m
           EOF
           make defconfig
           make clean
 
       - name: Compile packages
+        env:
+          PLUGIN_VERSION: ${{ needs.prepare.outputs.plugin_version }}
+          CORE_VERSION: ${{ needs.prepare.outputs.core_version }}
         run: |
           set -eu
           cd sdk
           ./scripts/feeds update vohive
           ./scripts/feeds install -a -p vohive
 
-          for pkg in luci-app-vohive vohive-core; do
-            make "package/feeds/vohive/${pkg}/clean" || true
-            if ! make "package/feeds/vohive/${pkg}/compile" -j"$(nproc)"; then
-              make "package/feeds/vohive/${pkg}/compile" -j1 V=s
-            fi
-          done
+          plugin_pkg_version="${PLUGIN_VERSION#v}"
+          make package/feeds/vohive/luci-app-vohive/clean PKG_VERSION="$plugin_pkg_version" || true
+          if ! make package/feeds/vohive/luci-app-vohive/compile -j"$(nproc)" PKG_VERSION="$plugin_pkg_version"; then
+            make package/feeds/vohive/luci-app-vohive/compile -j1 V=s PKG_VERSION="$plugin_pkg_version"
+          fi
+
+          make package/feeds/vohive/vohive-core/clean VOHIVE_VERSION="$CORE_VERSION" || true
+          if ! make package/feeds/vohive/vohive-core/compile -j"$(nproc)" VOHIVE_VERSION="$CORE_VERSION"; then
+            make package/feeds/vohive/vohive-core/compile -j1 V=s VOHIVE_VERSION="$CORE_VERSION"
+          fi
 
           package_dir="$(pwd)/bin/packages/${SDK_ARCH}/vohive"
           dist_dir="$(pwd)/../dist/${{ matrix.id }}"
@@ -213,9 +228,10 @@ jobs:
           cp "$package_dir"/APKINDEX* "$dist_dir"/ 2>/dev/null || true
 
           {
-            echo "Tag: ${{ needs.prepare.outputs.tag_name }}"
-            echo "LuCI version: ${{ needs.prepare.outputs.luci_version }}"
-            echo "VoHive core: ${VOHIVE_VERSION}"
+            echo "Plugin tag: ${{ needs.prepare.outputs.tag_name }}"
+            echo "Plugin version: $plugin_pkg_version"
+            echo "VoHive core: ${CORE_VERSION}"
+            echo "Core repository: ${{ needs.prepare.outputs.core_repo }}"
             echo "Build: ${{ matrix.label }}"
             echo "Build ID: ${{ matrix.id }}"
             echo "SDK: ${SDK_NAME}"
