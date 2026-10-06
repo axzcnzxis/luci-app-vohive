@@ -6,10 +6,13 @@ VoHive 的 OpenWrt / ImmortalWrt LuCI 管理插件。当前仓库是原项目失
 
 - 默认 Release 仓库：`https://github.com/axzcnzxis/luci-app-vohive`
 - 当前核心版本：`v1.5.4`
-- 当前插件版本：`0.1.19`
+- 当前插件版本：`0.1.20`
 - 当前只发布 `x86_64` / `amd64` 核心包，因为 fork 中没有可用的 ARM 二进制文件。
 - 核心和插件安装包下载后会校验 GitHub asset digest 或 Release 中的 `sha256sums.txt`。
 - 插件更新同时支持 OpenWrt 24.10 的 `opkg` 和 OpenWrt 25.12 的 `apk`。
+
+> `v0.1.19` 及更早的核心安装包在打包时被 OpenWrt 的 `rstrip` 步骤截断了 UPX
+> 尾部，包内 `vohive` 二进制不可用，请使用 `v0.1.20` 或更新的 Release。
 
 ## 包结构
 
@@ -45,15 +48,15 @@ VoHive 的 OpenWrt / ImmortalWrt LuCI 管理插件。当前仓库是原项目失
 OpenWrt 24.10 使用 IPK：
 
 ```sh
-opkg install luci-app-vohive_0.1.19-r1_all.ipk
-opkg install luci-app-vohive_0.1.19-r1_all.ipk vohive-core-amd64_1.5.4-r1_all.ipk
+opkg install luci-app-vohive_0.1.20-r1_all.ipk
+opkg install luci-app-vohive_0.1.20-r1_all.ipk vohive-core-amd64_1.5.4-r1_all.ipk
 ```
 
 OpenWrt 25.12 使用 APK：
 
 ```sh
-apk add --allow-untrusted ./luci-app-vohive-0.1.19-r1.apk
-apk add --allow-untrusted ./luci-app-vohive-0.1.19-r1.apk ./vohive-core-amd64-1.5.4-r1.apk
+apk add --allow-untrusted ./luci-app-vohive-0.1.20-r1.apk
+apk add --allow-untrusted ./luci-app-vohive-0.1.20-r1.apk ./vohive-core-amd64-1.5.4-r1.apk
 ```
 
 也可以只安装 `luci-app-vohive`，进入 LuCI 页面后点击“安装/更新核心”。
@@ -69,7 +72,7 @@ x86_64 / amd64 -> amd64
 手动触发 `Release Packages` workflow 时使用以下参数：
 
 ```text
-plugin_version: v0.1.19
+plugin_version: v0.1.20
 core_version: v1.5.4
 core_repo: axzcnzxis/luci-app-vohive
 ```
@@ -77,28 +80,32 @@ core_repo: axzcnzxis/luci-app-vohive
 推送新的 `v*` tag 也会触发构建：
 
 ```sh
-git tag v0.1.19
-git push origin v0.1.19
+git tag v0.1.20
+git push origin v0.1.20
 ```
 
 Release 产物：
 
 ```text
-luci-app-vohive_0.1.19-r1_all.ipk
-luci-app-vohive-0.1.19-r1.apk
+luci-app-vohive_0.1.20-r1_all.ipk
+luci-app-vohive-0.1.20-r1.apk
 vohive-core-amd64_1.5.4-r1_all.ipk
 vohive-core-amd64-1.5.4-r1.apk
 sha256sums.txt
 ```
 
-构建流程会先从 `core_repo` 的 `core_version` Release 下载 `vohive_v1.5.4_linux_amd64`，并对照 `sha256sums.txt` 校验后再打包。
+构建流程会先从 `core_repo` 的 `core_version` Release 下载 `vohive_v1.5.4_linux_amd64`，
+优先使用 GitHub API 的 asset digest 校验（缺失时回退到 Release 的 `sha256sums.txt`，两者
+都取不到会直接失败）。打包完成后还会从生成的 IPK / APK 中解出
+`/etc/vohive/bin/vohive`，与下载的原始二进制做 SHA256 对比，任何不一致都会让构建失败。
+`vohive-core` 关闭了 OpenWrt 的 `RSTRIP`，避免 UPX 二进制被截断。
 
 ## 开发构建
 
 把本仓库作为 OpenWrt SDK 的 package feed 使用，或复制到 SDK 的 `package/` 目录后执行：
 
 ```sh
-make package/vohive/luci-app-vohive/compile V=s PKG_VERSION=0.1.19
+make package/vohive/luci-app-vohive/compile V=s VOHIVE_PLUGIN_VERSION=0.1.20
 make package/vohive/vohive-core/compile V=s VOHIVE_VERSION=v1.5.4
 ```
 

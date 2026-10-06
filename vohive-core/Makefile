@@ -11,6 +11,13 @@ PKGARCH:=all
 
 include $(INCLUDE_DIR)/package.mk
 
+# The upstream VoHive core is a UPX-packed prebuilt binary. OpenWrt's
+# default package rstrip pass rewrites ELF files and drops the UPX trailer,
+# which truncates the executable and makes it unusable. Keep the packaged
+# binary byte-for-byte identical to the release asset.
+RSTRIP:=:
+STRIP:=:
+
 define Package/vohive-core/Default
   SECTION:=utils
   CATEGORY:=Utilities

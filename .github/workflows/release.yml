@@ -6,7 +6,7 @@ on:
       plugin_version:
         description: LuCI plugin release tag
         required: true
-        default: v0.1.19
+        default: v0.1.20
       core_version:
         description: VoHive core release tag
         required: true
@@ -21,7 +21,7 @@ on:
 
 env:
   TZ: Asia/Shanghai
-  PLUGIN_VERSION: ${{ github.event.inputs.plugin_version || github.ref_name || 'v0.1.19' }}
+  PLUGIN_VERSION: ${{ github.event.inputs.plugin_version || github.ref_name || 'v0.1.20' }}
   CORE_VERSION: ${{ github.event.inputs.core_version || 'v1.5.4' }}
   CORE_REPO: ${{ github.event.inputs.core_repo || 'axzcnzxis/luci-app-vohive' }}
 
@@ -145,11 +145,30 @@ jobs:
           base="https://github.com/${CORE_REPO}/releases/download/${CORE_VERSION}"
 
           curl -fL --connect-timeout 20 --retry 3 "$base/$asset" -o "source/vohive-core/files/vohive-${arch}"
-          curl -fL --connect-timeout 20 --retry 3 "$base/sha256sums.txt" -o sha256sums.txt
+          curl -fL --connect-timeout 20 --retry 3 "$base/sha256sums.txt" -o sha256sums.txt || : > sha256sums.txt
 
-          expected="$(awk -v f="$asset" '$2 == f || $2 == "*" f {print $1; exit}' sha256sums.txt)"
           actual="$(sha256sum "source/vohive-core/files/vohive-${arch}" | awk '{print $1}')"
-          [ -n "$expected" ] && [ "$actual" = "$expected" ]
+
+          # Prefer the digest published by the GitHub API, fall back to the
+          # release sha256sums.txt when the API does not expose one.
+          expected="$(curl -fsSL "https://api.github.com/repos/${CORE_REPO}/releases/tags/${CORE_VERSION}" \
+            | jq -r --arg n "$asset" '.assets[] | select(.name == $n) | .digest // empty' \
+            | sed -n 's/^sha256://p' | head -n 1)"
+          if [ -z "$expected" ]; then
+            expected="$(awk -v f="$asset" '$2 == f || $2 == "*" f {print $1; exit}' sha256sums.txt)"
+          fi
+
+          if [ -z "$expected" ]; then
+            echo "No SHA256 digest published for ${asset} in ${CORE_REPO}@${CORE_VERSION}" >&2
+            exit 1
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "SHA256 mismatch for ${asset}" >&2
+            echo "  expected: $expected" >&2
+            echo "  actual:   $actual" >&2
+            exit 1
+          fi
+          echo "${asset}: ${actual} OK"
 
           chmod 0755 "source/vohive-core/files/vohive-${arch}"
           file "source/vohive-core/files/vohive-${arch}"
@@ -238,6 +257,69 @@ jobs:
             echo "Package format: ${PACKAGE_EXT}"
             echo "Package count: ${#package_files[@]}"
           } > "$dist_dir/BUILD-INFO.txt"
+
+      - name: Verify packaged core binary
+        run: |
+          set -eu
+          cd sdk
+
+          expected="$(sha256sum ../source/vohive-core/files/vohive-amd64 | awk '{print $1}')"
+          package_dir="$(pwd)/bin/packages/${SDK_ARCH}/vohive"
+          if [ ! -d "$package_dir" ]; then
+            echo "Package directory not found: $package_dir" >&2
+            exit 1
+          fi
+
+          verified=0
+          for pkg in "$package_dir"/vohive-core-amd64*.${PACKAGE_EXT}; do
+            [ -f "$pkg" ] || continue
+            tmpdir="$(mktemp -d)"
+
+            if [ "${PACKAGE_EXT}" = "ipk" ]; then
+              ( cd "$tmpdir" && ar x "$pkg" )
+              data_archive="$(find "$tmpdir" -maxdepth 1 -name 'data.tar.*' | head -n 1)"
+              if [ -z "$data_archive" ]; then
+                echo "$pkg: no data.tar.* member found" >&2
+                exit 1
+              fi
+              case "$data_archive" in
+                *.gz) tar -xzf "$data_archive" -C "$tmpdir" ;;
+                *.zst) tar --zstd -xf "$data_archive" -C "$tmpdir" ;;
+                *.xz) tar -xJf "$data_archive" -C "$tmpdir" ;;
+                *) echo "$pkg: unsupported data archive $data_archive" >&2; exit 1 ;;
+              esac
+            else
+              apk_tool="$(pwd)/staging_dir/host/bin/apk"
+              if [ ! -x "$apk_tool" ]; then
+                echo "Host apk tool not found at $apk_tool" >&2
+                exit 1
+              fi
+              "$apk_tool" extract --destination "$tmpdir" "$pkg"
+            fi
+
+            core_bin="$tmpdir/etc/vohive/bin/vohive"
+            if [ ! -f "$core_bin" ]; then
+              echo "$pkg: /etc/vohive/bin/vohive is missing" >&2
+              exit 1
+            fi
+
+            actual="$(sha256sum "$core_bin" | awk '{print $1}')"
+            if [ "$actual" != "$expected" ]; then
+              echo "$pkg: packaged core binary does not match the release asset" >&2
+              echo "  expected: $expected" >&2
+              echo "  actual:   $actual" >&2
+              exit 1
+            fi
+
+            echo "$pkg: core binary verified (${actual})"
+            rm -rf "$tmpdir"
+            verified=$((verified + 1))
+          done
+
+          if [ "$verified" -eq 0 ]; then
+            echo "No vohive-core-amd64.${PACKAGE_EXT} package was built" >&2
+            exit 1
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
