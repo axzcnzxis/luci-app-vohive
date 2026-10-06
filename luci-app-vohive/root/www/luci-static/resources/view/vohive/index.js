@@ -749,28 +749,112 @@ return view.extend({
 		}, installed ? _('%s: 已安装').format(label) : _('%s: 未安装').format(label));
 	},
 
-	renderDeviceDependencies: function(devicePane, data) {
-		return E('div', { 'class': 'cbi-section' }, [
-			E('h3', {}, _('依赖状态')),
-			E('div', { 'style': 'display:flex; gap:1em; flex-wrap:wrap; align-items:center;' }, [
-				this.renderDependencyState('kmod-usb-serial', data.serial_driver_installed),
-				this.renderDependencyState('kmod-usb-serial-option', data.option_driver_installed),
-				this.renderDependencyState('socat', data.socat_installed),
-				E('span', {}, _('内核版本: %s').format(data.kernel_version || _('未知'))),
-				data.serial_driver_installed && data.option_driver_installed ? '' : E('button', {
-					'class': 'btn cbi-button cbi-button-action',
-					'click': ui.createHandlerFn(this, function() {
-						return this.runDeviceTool(devicePane, [ 'install_serial_drivers' ], _('确认安装串口驱动吗？\n\n会先尝试从当前软件源安装 kmod-usb-serial、kmod-usb-serial-wwan 和 kmod-usb-serial-option；如果当前源没有与内核匹配的模块，会自动改用与当前内核版本匹配的模块源下载安装。\n需要可用网络。'));
-					})
-				}, _('安装串口驱动')),
-				data.socat_installed ? '' : E('button', {
-					'class': 'btn cbi-button cbi-button-action',
-					'click': ui.createHandlerFn(this, function() {
-						return this.runDeviceTool(devicePane, [ 'install_socat' ], _('确认安装 socat 吗？\n\n这会使用当前系统的 opkg 或 apk 安装 socat。\n安装包会占用路由器存储空间，需要可用网络。'));
-					})
-				}, _('安装 socat'))
+	primaryAtPort: function(data) {
+		var ports = (data && data.ports) || [];
+		var pick = function(list) {
+			return list.length ? list[0].port : '';
+		};
+
+		return pick(ports.filter(function(port) { return port.primary_at && port.status == 'ok'; })) ||
+			pick(ports.filter(function(port) { return port.status == 'ok' && port.identity && port.identity != 'unknown'; })) ||
+			pick(ports.filter(function(port) { return port.status == 'ok'; }));
+	},
+
+	renderInstallButton: function(devicePane, action, confirmText, label) {
+		return E('button', {
+			'class': 'btn cbi-button cbi-button-action',
+			'click': ui.createHandlerFn(this, function() {
+				return this.runDeviceTool(devicePane, [ action ], confirmText);
+			})
+		}, label);
+	},
+
+	probeEsimCapability: function(devicePane, port) {
+		dom.content(devicePane, E('div', { 'class': 'cbi-section' }, loadingText(_('正在检测 eSIM 能力...'))));
+
+		return fs.exec_direct('/usr/share/vohive/device_tools.sh', [ 'probe_esim_capability', port ])
+			.catch(function(e) {
+				return JSON.stringify({ ok: false, message: e.message || String(e) });
+			})
+			.then(function(text) {
+				var result = parseJson(text);
+				this.esimProbe = result.ok === false ? null : result;
+				ui.addNotification(null, E('p', {}, result.message || (result.ok === false ? _('检测失败') : _('检测完成'))), result.ok === false ? 'danger' : 'info');
+				return this.loadDevicePane(devicePane, result);
+			}.bind(this));
+	},
+
+	renderEsimCapability: function(probe) {
+		var transportLabels = { at: 'AT', qmi: 'QMI', mbim: 'MBIM', none: _('无可用传输') };
+
+		return E('div', { 'style': 'margin-top:.75em;' }, [
+			E('strong', {}, _('eSIM 能力检测')),
+			this.renderInfoGrid([
+				[ _('AT APDU'), probe.at_apdu_supported ? _('支持') : _('不支持') ],
+				[ _('QMI 控制口'), probe.qmi_device_present ? _('可用') : _('不可用') ],
+				[ _('MBIM 控制口'), probe.mbim_device_present ? _('可用') : _('不可用') ],
+				[ _('推荐传输'), transportLabels[probe.recommended_transport] || probe.recommended_transport || '-' ],
+				[ _('控制设备'), probe.control_device || '-' ]
 			])
 		]);
+	},
+
+	renderPortEsimHint: function(port) {
+		var transportLabels = { at: 'AT', qmi: 'QMI', mbim: 'MBIM', none: _('无可用传输') };
+
+		if (!this.esimProbe || this.esimProbe.port != port.port)
+			return _('未检测');
+
+		return transportLabels[this.esimProbe.recommended_transport] || this.esimProbe.recommended_transport || _('未检测');
+	},
+
+	renderDeviceDependencies: function(devicePane, data) {
+		var atPort = this.primaryAtPort(data);
+		var states = [
+			this.renderDependencyState('kmod-usb-serial', data.serial_driver_installed),
+			this.renderDependencyState('kmod-usb-serial-option', data.option_driver_installed),
+			this.renderDependencyState('kmod-usb-net-qmi-wwan', data.qmi_driver_installed),
+			this.renderDependencyState('kmod-usb-net-cdc-mbim', data.mbim_driver_installed),
+			this.renderDependencyState('socat', data.socat_installed),
+			E('span', {}, _('内核版本: %s').format(data.kernel_version || _('未知')))
+		];
+		var buttons = [];
+
+		if (data.cdc_wdm_present)
+			states.push(E('span', {}, _('控制口: %s').format(data.control_device || _('已就绪'))));
+
+		if (!(data.serial_driver_installed && data.option_driver_installed))
+			buttons.push(this.renderInstallButton(devicePane, 'install_serial_drivers', _('确认安装串口驱动吗？\n\n会先尝试从当前软件源安装 kmod-usb-serial、kmod-usb-serial-wwan 和 kmod-usb-serial-option；如果当前源没有与内核匹配的模块，会自动改用与当前内核版本匹配的模块源下载安装。\n需要可用网络。'), _('安装串口驱动')));
+
+		if (!data.qmi_driver_installed)
+			buttons.push(this.renderInstallButton(devicePane, 'install_qmi_driver', _('确认安装 QMI 驱动吗？\n\n会安装 kmod-usb-net、kmod-usb-wdm 和 kmod-usb-net-qmi-wwan；如果当前源没有与内核匹配的模块，会自动改用与当前内核版本匹配的模块源下载安装。\n需要可用网络。'), _('安装 QMI 驱动')));
+
+		if (!data.mbim_driver_installed)
+			buttons.push(this.renderInstallButton(devicePane, 'install_mbim_driver', _('确认安装 MBIM 驱动吗？\n\n会安装 kmod-usb-net、kmod-usb-net-cdc-ether、kmod-usb-wdm、kmod-usb-net-cdc-ncm 和 kmod-usb-net-cdc-mbim；如果当前源没有与内核匹配的模块，会自动改用与当前内核版本匹配的模块源下载安装。\n需要可用网络。'), _('安装 MBIM 驱动')));
+
+		if (!data.socat_installed)
+			buttons.push(this.renderInstallButton(devicePane, 'install_socat', _('确认安装 socat 吗？\n\n这会使用当前系统的 opkg 或 apk 安装 socat。\n安装包会占用路由器存储空间，需要可用网络。'), _('安装 socat')));
+
+		if (atPort)
+			buttons.push(E('button', {
+				'class': 'btn cbi-button cbi-button-action',
+				'click': ui.createHandlerFn(this, function() {
+					return this.probeEsimCapability(devicePane, atPort);
+				})
+			}, _('检测 eSIM 能力')));
+
+		var sections = [
+			E('h3', {}, _('依赖状态')),
+			E('div', { 'style': 'display:flex; gap:1em; flex-wrap:wrap; align-items:center;' }, states)
+		];
+
+		if (buttons.length)
+			sections.push(E('div', { 'style': 'display:flex; gap:.4em; flex-wrap:wrap; margin-top:.75em;' }, buttons));
+
+		if (this.esimProbe)
+			sections.push(this.renderEsimCapability(this.esimProbe));
+
+		return E('div', { 'class': 'cbi-section' }, sections);
 	},
 
 	deviceIdentityLabel: function(port) {
@@ -880,6 +964,7 @@ return view.extend({
 				[ _('运营商'), summary.operator || '-' ],
 				[ _('当前网络'), summary.network || '-' ],
 				[ _('USB 网络模式'), port.usbnet_label || _('未知') ],
+				[ _('eSIM 传输建议'), this.renderPortEsimHint(port) ],
 				[ _('USB 身份转换'), this.renderIdentityAction(devicePane, port) ],
 				[ _('USB 网络模式切换'), this.renderUsbnetActions(devicePane, port) ]
 			])

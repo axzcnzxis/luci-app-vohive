@@ -70,6 +70,30 @@ option_driver_state() {
 	fi
 }
 
+# A module counts as available when its .ko exists for the running kernel or
+# when it was linked into the kernel (some custom x86_64 builds build usbnet in
+# instead of shipping it as a module).
+module_available() {
+	module_file_present "$1" && return 0
+	grep -q "/$1\.ko" "/lib/modules/$(kernel_release)/modules.builtin" 2>/dev/null
+}
+
+qmi_driver_state() {
+	if pkg_installed kmod-usb-net-qmi-wwan || module_available qmi_wwan; then
+		printf 'true'
+	else
+		printf 'false'
+	fi
+}
+
+mbim_driver_state() {
+	if pkg_installed kmod-usb-net-cdc-mbim || module_available cdc_mbim; then
+		printf 'true'
+	else
+		printf 'false'
+	fi
+}
+
 has_cmd() {
 	command -v "$1" >/dev/null 2>&1
 }
@@ -148,11 +172,25 @@ task_progress() {
 
 # Ordered by dependency: option depends on wwan, wwan depends on usbserial.
 KMOD_SERIAL_PACKAGES="kmod-usb-serial kmod-usb-serial-wwan kmod-usb-serial-option"
+# QMI backend: qmi_wwan depends on usbnet and cdc_wdm (kmod-usb-wdm).
+KMOD_QMI_PACKAGES="kmod-usb-net kmod-usb-wdm kmod-usb-net-qmi-wwan"
+# MBIM backend: cdc_mbim depends on cdc_ncm -> cdc_ether, plus cdc_wdm.
+KMOD_MBIM_PACKAGES="kmod-usb-net kmod-usb-net-cdc-ether kmod-usb-wdm kmod-usb-net-cdc-ncm kmod-usb-net-cdc-mbim"
 
 serial_modules_present() {
-	module_file_present usbserial &&
-		module_file_present usb_wwan &&
-		module_file_present option
+	module_available usbserial &&
+		module_available usb_wwan &&
+		module_available option
+}
+
+qmi_modules_present() {
+	module_available qmi_wwan
+}
+
+mbim_modules_present() {
+	module_available cdc_mbim &&
+		module_available cdc_ncm &&
+		module_available cdc_wdm
 }
 
 load_serial_modules() {
@@ -160,6 +198,17 @@ load_serial_modules() {
 	modprobe usb_wwan 2>/dev/null || true
 	modprobe option 2>/dev/null || true
 	prepare_serial_driver
+}
+
+load_qmi_modules() {
+	modprobe cdc_wdm 2>/dev/null || true
+	modprobe qmi_wwan 2>/dev/null || true
+}
+
+load_mbim_modules() {
+	modprobe cdc_wdm 2>/dev/null || true
+	modprobe cdc_ncm 2>/dev/null || true
+	modprobe cdc_mbim 2>/dev/null || true
 }
 
 bind_option_id() {
@@ -180,6 +229,22 @@ prepare_serial_driver() {
 
 serial_ports() {
 	ls /dev/ttyUSB* 2>/dev/null | sort -V
+}
+
+control_devices() {
+	ls /dev/cdc-wdm* 2>/dev/null | sort -V
+}
+
+first_control_device() {
+	control_devices | head -n 1
+}
+
+cdc_wdm_state() {
+	if module_available cdc_wdm || [ -n "$(first_control_device)" ]; then
+		printf 'true'
+	else
+		printf 'false'
+	fi
 }
 
 at_with_socat() {
@@ -394,7 +459,7 @@ identity_from_vidpid() {
 identity_label() {
 	case "$1" in
 		dji) printf 'DJI 4G Module (2ca3:4006)' ;;
-		ec25) printf 'Quectel EC25 (2c7c:0125)' ;;
+		ec25) printf 'Quectel EC20/EC25 (2c7c:0125)' ;;
 		ec21) printf 'Quectel EC21 (2c7c:0124)' ;;
 		*) printf '未知' ;;
 	esac
@@ -679,15 +744,28 @@ probe_port_json() {
 	printf '}'
 }
 
-status_json() {
-	printf '{"ok":true,'
+# Shared dependency block for status/probe responses. It reports both the
+# package/driver state and the /dev/cdc-wdm* control device used by the QMI and
+# MBIM backends.
+driver_status_json() {
 	printf '"kernel_version":"%s",' "$(json_escape "$(kernel_release)")"
 	printf '"kernel_package_version":"%s",' "$(json_escape "$(kernel_package_version 2>/dev/null || true)")"
 	printf '"serial_driver_installed":%s,' "$(serial_driver_state)"
 	printf '"option_driver_installed":%s,' "$(option_driver_state)"
+	printf '"qmi_driver_installed":%s,' "$(qmi_driver_state)"
+	printf '"mbim_driver_installed":%s,' "$(mbim_driver_state)"
+	printf '"cdc_wdm_present":%s,' "$(cdc_wdm_state)"
+	printf '"control_device":"%s",' "$(json_escape "$(first_control_device)")"
+	printf '"uqmi_installed":%s,' "$(dep_value uqmi)"
+	printf '"umbim_installed":%s,' "$(dep_value umbim)"
 	printf '"socat_installed":%s,' "$(dep_value socat)"
 	printf '"stty_available":%s,' "$(has_cmd stty && printf true || printf false)"
 	printf '"timeout_available":%s' "$(has_timeout && printf true || printf false)"
+}
+
+status_json() {
+	printf '{"ok":true,'
+	driver_status_json
 	printf '}\n'
 }
 
@@ -696,14 +774,8 @@ probe_json() {
 
 	prepare_serial_driver
 	printf '{"ok":true,'
-	printf '"kernel_version":"%s",' "$(json_escape "$(kernel_release)")"
-	printf '"kernel_package_version":"%s",' "$(json_escape "$(kernel_package_version 2>/dev/null || true)")"
-	printf '"serial_driver_installed":%s,' "$(serial_driver_state)"
-	printf '"option_driver_installed":%s,' "$(option_driver_state)"
-	printf '"socat_installed":%s,' "$(dep_value socat)"
-	printf '"stty_available":%s,' "$(has_cmd stty && printf true || printf false)"
-	printf '"timeout_available":%s,' "$(has_timeout && printf true || printf false)"
-	printf '"ports":['
+	driver_status_json
+	printf ',"ports":['
 	for port in $(serial_ports); do
 		task_progress "probe" "正在探测 $port"
 		full=0
@@ -767,13 +839,14 @@ expand_kmod_feed() {
 	printf '%s' "$1" | sed "s|{kernel}|$2|g"
 }
 
-# Download the three kmod ipk files from a kernel-matched feed, verify them
+# Download the requested kmod ipk files from a kernel-matched feed, verify them
 # against the feed index and install them locally. Local ipk installs do not
 # depend on the feed being configured in /etc/opkg, so this works even when the
 # device only has the stock release feeds.
 install_kmods_from_feed() {
 	local base="$1"
 	local workdir="$2"
+	local packages="$3"
 	local index="$workdir/Packages"
 	local package filename expected file actual
 
@@ -786,7 +859,7 @@ install_kmods_from_feed() {
 		return 1
 	}
 
-	for package in $KMOD_SERIAL_PACKAGES; do
+	for package in $packages; do
 		filename="$(feed_package_field "$index" "$package" Filename)"
 		if [ -z "$filename" ]; then
 			printf '模块源中没有 %s\n' "$package"
@@ -814,7 +887,15 @@ install_kmods_from_feed() {
 	return 0
 }
 
-install_serial_drivers_json() {
+# Generic kmod installer shared by the serial, QMI and MBIM drivers.
+# $1 label (shown to the user), $2 package list, $3 present-check function,
+# $4 load function. It first tries the configured feeds and only falls back to
+# a kernel-matched kmod feed when the stock feeds do not carry the modules.
+install_drivers_json() {
+	local label="$1"
+	local packages="$2"
+	local present_fn="$3"
+	local load_fn="$4"
 	local kernel version manager output native_output base workdir
 
 	kernel="$(kernel_release)"
@@ -822,22 +903,22 @@ install_serial_drivers_json() {
 	workdir="/tmp/vohive/kmod.$$"
 	mkdir -p "$workdir"
 
-	if serial_modules_present; then
-		load_serial_modules
+	if "$present_fn"; then
+		"$load_fn"
 		rm -rf "$workdir"
-		output="${output}串口模块已存在，已直接加载，无需联网安装。\n"
-		printf '{"ok":true,"message":"串口驱动已就绪","output":"%s"}\n' "$(json_escape "$output")"
+		output="${output}${label}模块已存在，已直接加载，无需联网安装。\n"
+		printf '{"ok":true,"message":"%s已就绪","output":"%s"}\n' "$(json_escape "$label")" "$(json_escape "$output")"
 		return 0
 	fi
 
 	manager="$(package_manager 2>/dev/null || true)"
-	output="${output}尝试从当前软件源安装: $KMOD_SERIAL_PACKAGES\n"
+	output="${output}尝试从当前软件源安装: $packages\n"
 	case "$manager" in
 		opkg)
-			native_output="$(opkg update 2>&1; opkg install $KMOD_SERIAL_PACKAGES 2>&1)"
+			native_output="$(opkg update 2>&1; opkg install $packages 2>&1)"
 			;;
 		apk)
-			native_output="$(apk update 2>&1; apk add $KMOD_SERIAL_PACKAGES 2>&1)"
+			native_output="$(apk update 2>&1; apk add $packages 2>&1)"
 			;;
 		*)
 			native_output="未找到 opkg 或 apk"
@@ -845,25 +926,25 @@ install_serial_drivers_json() {
 	esac
 	output="${output}${native_output}\n"
 
-	if serial_modules_present; then
-		load_serial_modules
+	if "$present_fn"; then
+		"$load_fn"
 		rm -rf "$workdir"
 		output="${output}安装完成。\n"
-		printf '{"ok":true,"message":"串口驱动安装完成","output":"%s"}\n' "$(json_escape "$output")"
+		printf '{"ok":true,"message":"%s安装完成","output":"%s"}\n' "$(json_escape "$label")" "$(json_escape "$output")"
 		return 0
 	fi
 
 	if [ "$manager" != opkg ]; then
 		rm -rf "$workdir"
-		output="${output}当前源没有与内核 $kernel 匹配的串口模块，且包管理器 ${manager:-未知} 不支持模块源回退。\n"
-		printf '{"ok":false,"message":"安装失败：当前源没有匹配的串口驱动","output":"%s"}\n' "$(json_escape "$output")"
+		output="${output}当前源没有与内核 $kernel 匹配的模块，且包管理器 ${manager:-未知} 不支持模块源回退。\n"
+		printf '{"ok":false,"message":"安装失败：当前源没有匹配的%s","output":"%s"}\n' "$(json_escape "$label")" "$(json_escape "$output")"
 		exit 1
 	fi
 
 	version="$(kernel_package_version 2>/dev/null || true)"
 	if [ -z "$version" ]; then
 		rm -rf "$workdir"
-		output="${output}当前源没有与内核 $kernel 匹配的串口模块，也无法确定内核软件包版本。\n"
+		output="${output}当前源没有与内核 $kernel 匹配的模块，也无法确定内核软件包版本。\n"
 		printf '{"ok":false,"message":"无法确定内核版本，安装失败","output":"%s"}\n' "$(json_escape "$output")"
 		exit 1
 	fi
@@ -872,23 +953,133 @@ install_serial_drivers_json() {
 	for base in $(kmod_feed_candidates); do
 		base="$(expand_kmod_feed "$base" "$version")"
 		output="${output}模块源: $base\n"
-		install_kmods_from_feed "$base" "$workdir" > "$workdir/log" 2>&1 || true
+		install_kmods_from_feed "$base" "$workdir" "$packages" > "$workdir/log" 2>&1 || true
 		output="${output}$(cat "$workdir/log" 2>/dev/null || true)"
-		serial_modules_present && break
+		"$present_fn" && break
 	done
 
 	rm -rf "$workdir"
 
-	if serial_modules_present; then
-		load_serial_modules
+	if "$present_fn"; then
+		"$load_fn"
 		output="${output}安装完成。\n"
-		printf '{"ok":true,"message":"串口驱动安装完成","output":"%s"}\n' "$(json_escape "$output")"
+		printf '{"ok":true,"message":"%s安装完成","output":"%s"}\n' "$(json_escape "$label")" "$(json_escape "$output")"
 		return 0
 	fi
 
-	output="${output}未找到与内核 $kernel 匹配的串口模块。\n可在 /etc/config/vohive 中通过 kmod_feed_base 指定模块源，地址中的 {kernel} 会替换为内核软件包版本。\n"
-	printf '{"ok":false,"message":"安装失败：没有匹配当前内核的串口驱动","output":"%s"}\n' "$(json_escape "$output")"
+	output="${output}未找到与内核 $kernel 匹配的模块。\n可在 /etc/config/vohive 中通过 kmod_feed_base 指定模块源，地址中的 {kernel} 会替换为内核软件包版本。\n"
+	printf '{"ok":false,"message":"安装失败：没有匹配当前内核的%s","output":"%s"}\n' "$(json_escape "$label")" "$(json_escape "$output")"
 	exit 1
+}
+
+install_serial_drivers_json() {
+	install_drivers_json '串口驱动' "$KMOD_SERIAL_PACKAGES" serial_modules_present load_serial_modules
+}
+
+install_qmi_drivers_json() {
+	install_drivers_json 'QMI 驱动' "$KMOD_QMI_PACKAGES" qmi_modules_present load_qmi_modules
+}
+
+install_mbim_drivers_json() {
+	install_drivers_json 'MBIM 驱动' "$KMOD_MBIM_PACKAGES" mbim_modules_present load_mbim_modules
+}
+
+# Classify a read-only AT probe into ok / error / no_response / unknown.
+at_probe_state() {
+	local response="$1"
+
+	if [ -z "$response" ]; then
+		printf 'no_response'
+	elif printf '%s\n' "$response" | grep -q 'ERROR'; then
+		printf 'error'
+	elif printf '%s\n' "$response" | grep -q 'OK'; then
+		printf 'ok'
+	else
+		printf 'unknown'
+	fi
+}
+
+esim_probe_message() {
+	local at_apdu="$1"
+	local recommended="$2"
+
+	if [ "$at_apdu" = true ]; then
+		printf '模块支持 AT APDU，可直接使用 AT 传输管理 eSIM。'
+	elif [ "$recommended" = qmi ]; then
+		printf 'AT 通道不支持 APDU，但检测到 QMI 控制口，可尝试改用 QMI 传输。'
+	elif [ "$recommended" = mbim ]; then
+		printf 'AT 通道不支持 APDU，但检测到 MBIM 控制口，可尝试改用 MBIM 传输。'
+	else
+		printf 'AT 通道不支持 APDU，且未检测到 QMI/MBIM 控制口。该模块可能无法通过本工具管理 eSIM。'
+	fi
+}
+
+# Read-only eSIM/APDU capability probe. It never writes to the module: it only
+# asks the AT parser whether the SIM APDU commands exist and whether a QMI/MBIM
+# control device (/dev/cdc-wdm*) is exposed.
+probe_esim_capability_json() {
+	local port="$1"
+	local ccho cgla cchc csim
+	local ccho_state cgla_state cchc_state csim_state
+	local at_apdu=false qmi_present=false mbim_present=false
+	local recommended=none control output
+
+	[ -n "$port" ] || fail "缺少 AT 串口参数"
+	[ -c "$port" ] || fail "串口不存在: $port"
+
+	ccho="$(at_query "$port" 'AT+CCHO=?' 2)"
+	cgla="$(at_query "$port" 'AT+CGLA=?' 2)"
+	cchc="$(at_query "$port" 'AT+CCHC=?' 2)"
+	csim="$(at_query "$port" 'AT+CSIM=?' 2)"
+
+	ccho_state="$(at_probe_state "$ccho")"
+	cgla_state="$(at_probe_state "$cgla")"
+	cchc_state="$(at_probe_state "$cchc")"
+	csim_state="$(at_probe_state "$csim")"
+
+	if [ "$ccho_state" = ok ] && [ "$cgla_state" = ok ]; then
+		at_apdu=true
+	fi
+
+	control="$(first_control_device)"
+	if [ -n "$control" ] && [ "$(qmi_driver_state)" = true ]; then
+		qmi_present=true
+	fi
+	if [ -n "$control" ] && [ "$(mbim_driver_state)" = true ]; then
+		mbim_present=true
+	fi
+
+	if [ "$at_apdu" = true ]; then
+		recommended=at
+	elif [ "$qmi_present" = true ]; then
+		recommended=qmi
+	elif [ "$mbim_present" = true ]; then
+		recommended=mbim
+	fi
+
+	output="AT 端口: $port\n"
+	output="${output}AT+CCHO=?: $ccho_state\n$ccho\n"
+	output="${output}AT+CGLA=?: $cgla_state\n$cgla\n"
+	output="${output}AT+CCHC=?: $cchc_state\n$cchc\n"
+	output="${output}AT+CSIM=?: $csim_state\n$csim\n"
+	output="${output}控制设备: ${control:-未发现 /dev/cdc-wdm*}\n"
+	output="${output}QMI 驱动: $(qmi_driver_state)\n"
+	output="${output}MBIM 驱动: $(mbim_driver_state)\n"
+	output="${output}推荐传输: $recommended\n"
+
+	printf '{"ok":true,'
+	printf '"port":"%s",' "$(json_escape "$port")"
+	printf '"at_apdu_supported":%s,' "$at_apdu"
+	printf '"qmi_device_present":%s,' "$qmi_present"
+	printf '"mbim_device_present":%s,' "$mbim_present"
+	printf '"recommended_transport":"%s",' "$recommended"
+	printf '"control_device":"%s",' "$(json_escape "$control")"
+	printf '"at_ccho":"%s",' "$(json_escape "$ccho_state")"
+	printf '"at_cgla":"%s",' "$(json_escape "$cgla_state")"
+	printf '"at_cchc":"%s",' "$(json_escape "$cchc_state")"
+	printf '"at_csim":"%s",' "$(json_escape "$csim_state")"
+	printf '"message":"%s",' "$(json_escape "$(esim_probe_message "$at_apdu" "$recommended")")"
+	printf '"output":"%s"}\n' "$(json_escape "$output")"
 }
 
 target_command() {
@@ -1076,6 +1267,15 @@ case "$ACTION" in
 		;;
 	install_serial_drivers)
 		install_serial_drivers_json
+		;;
+	install_qmi_driver)
+		install_qmi_drivers_json
+		;;
+	install_mbim_driver)
+		install_mbim_drivers_json
+		;;
+	probe_esim_capability)
+		probe_esim_capability_json "$PORT"
 		;;
 	install_socat)
 		install_packages 'socat'
