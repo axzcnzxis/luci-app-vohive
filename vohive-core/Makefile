@@ -7,7 +7,9 @@ PKG_VERSION:=$(patsubst v%,%,$(VOHIVE_VERSION))
 PKG_RELEASE:=1
 PKG_LICENSE:=Proprietary
 PKG_MAINTAINER:=VoHive
-PKGARCH:=all
+# The fork currently ships an x86_64 prebuilt core only. Marking the package
+# as x86_64 prevents opkg/apk from installing it on incompatible targets.
+PKGARCH:=x86_64
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -22,7 +24,7 @@ define Package/vohive-core/Default
   SECTION:=utils
   CATEGORY:=Utilities
   DEPENDS:=
-  PKGARCH:=all
+  PKGARCH:=x86_64
 endef
 
 ifeq ($(VOHIVE_ENABLE_ARM),1)
