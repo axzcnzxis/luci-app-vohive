@@ -202,9 +202,9 @@ jobs:
           ./scripts/feeds install -a -p vohive
 
           plugin_pkg_version="${PLUGIN_VERSION#v}"
-          make package/feeds/vohive/luci-app-vohive/clean PKG_VERSION="$plugin_pkg_version" || true
-          if ! make package/feeds/vohive/luci-app-vohive/compile -j"$(nproc)" PKG_VERSION="$plugin_pkg_version"; then
-            make package/feeds/vohive/luci-app-vohive/compile -j1 V=s PKG_VERSION="$plugin_pkg_version"
+          make package/feeds/vohive/luci-app-vohive/clean VOHIVE_PLUGIN_VERSION="$plugin_pkg_version" || true
+          if ! make package/feeds/vohive/luci-app-vohive/compile -j"$(nproc)" VOHIVE_PLUGIN_VERSION="$plugin_pkg_version"; then
+            make package/feeds/vohive/luci-app-vohive/compile -j1 V=s VOHIVE_PLUGIN_VERSION="$plugin_pkg_version"
           fi
 
           make package/feeds/vohive/vohive-core/clean VOHIVE_VERSION="$CORE_VERSION" || true
