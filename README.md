@@ -69,11 +69,16 @@ wget -qO- https://raw.githubusercontent.com/axzcnzxis/luci-app-vohive/main/insta
 
 ## 手动安装
 
-先下载本仓库对应 Release 中的安装包，然后执行：
+`opkg install ./xxx.ipk` 和 `apk add ./xxx.apk` 只会读取本机已经存在的安装包。
+如果直接执行下面的安装命令而没有先下载文件，就会提示
+`No such file or directory`。请先进入 `/tmp` 并下载对应 Release 的安装包。
 
 OpenWrt 24.10 使用 IPK：
 
 ```sh
+cd /tmp
+wget https://github.com/axzcnzxis/luci-app-vohive/releases/download/v0.1.21/luci-app-vohive_0.1.21-r1_all.ipk
+wget https://github.com/axzcnzxis/luci-app-vohive/releases/download/v0.1.21/vohive-core-amd64_1.5.4-r1_x86_64.ipk
 opkg update
 opkg install ./luci-app-vohive_0.1.21-r1_all.ipk ./vohive-core-amd64_1.5.4-r1_x86_64.ipk
 ```
@@ -81,6 +86,9 @@ opkg install ./luci-app-vohive_0.1.21-r1_all.ipk ./vohive-core-amd64_1.5.4-r1_x8
 OpenWrt 25.12 使用 APK：
 
 ```sh
+cd /tmp
+wget https://github.com/axzcnzxis/luci-app-vohive/releases/download/v0.1.21/luci-app-vohive-0.1.21-r1.apk
+wget https://github.com/axzcnzxis/luci-app-vohive/releases/download/v0.1.21/vohive-core-amd64-1.5.4-r1.apk
 apk update
 apk add --allow-untrusted ./luci-app-vohive-0.1.21-r1.apk ./vohive-core-amd64-1.5.4-r1.apk
 ```
