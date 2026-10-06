@@ -14,6 +14,30 @@ VoHive 的 OpenWrt / ImmortalWrt LuCI 管理插件。当前仓库是原项目失
 > `v0.1.19` 及更早的核心安装包在打包时被 OpenWrt 的 `rstrip` 步骤截断了 UPX
 > 尾部，包内 `vohive` 二进制不可用，请使用 `v0.1.20` 或更新的 Release。
 
+## 一键安装
+
+适用于 OpenWrt / ImmortalWrt 24.10 和 25.12 的 `x86_64` 设备。脚本会自动识别
+`opkg` 或 `apk`，下载最新 Release 中的插件和核心，校验 SHA256 后安装：
+
+```sh
+wget -qO- https://raw.githubusercontent.com/axzcnzxis/luci-app-vohive/main/install.sh | sh
+```
+
+如果设备已安装 `curl`，也可以使用：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/axzcnzxis/luci-app-vohive/main/install.sh | sh
+```
+
+指定版本安装：
+
+```sh
+wget -qO- https://raw.githubusercontent.com/axzcnzxis/luci-app-vohive/main/install.sh | sh -s -- v0.1.21
+```
+
+脚本只会安装插件和 `vohive-core-amd64` 核心，不会修改现有 VoHive 配置。
+安装完成后打开 LuCI 的 `服务 -> VoHive`。
+
 ## 包结构
 
 - `luci-app-vohive`：LuCI 页面、UCI 配置、procd 服务、核心下载与回滚脚本，不包含 VoHive 二进制。
@@ -43,21 +67,26 @@ VoHive 的 OpenWrt / ImmortalWrt LuCI 管理插件。当前仓库是原项目失
 - 显示核心状态、服务状态、端口监听提示和最近日志。
 - 核心回滚只保留上一个版本和架构元数据，回滚时重新下载旧版本核心，不在闪存中保存第二份完整二进制。
 
-## 安装
+## 手动安装
+
+先下载本仓库对应 Release 中的安装包，然后执行：
 
 OpenWrt 24.10 使用 IPK：
 
 ```sh
-opkg install luci-app-vohive_0.1.21-r1_all.ipk vohive-core-amd64_1.5.4-r1_x86_64.ipk
+opkg update
+opkg install ./luci-app-vohive_0.1.21-r1_all.ipk ./vohive-core-amd64_1.5.4-r1_x86_64.ipk
 ```
 
 OpenWrt 25.12 使用 APK：
 
 ```sh
+apk update
 apk add --allow-untrusted ./luci-app-vohive-0.1.21-r1.apk ./vohive-core-amd64-1.5.4-r1.apk
 ```
 
-也可以只安装 `luci-app-vohive`，进入 LuCI 页面后点击“安装/更新核心”。
+也可以只安装 `luci-app-vohive`，进入 LuCI 页面后点击“安装/更新核心”。这种方式不会
+预装本地核心包，后续由插件从 Release 下载核心。
 
 当前架构对应关系：
 
