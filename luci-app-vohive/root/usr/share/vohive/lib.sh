@@ -92,6 +92,42 @@ package_manager() {
 	return 1
 }
 
+kernel_release() {
+	uname -r 2>/dev/null || true
+}
+
+# Full version of the installed kernel package, for example
+# "6.18.2~8cd43842179db3bf4558923c83a3aa70-r1". Kernel modules are built
+# against this exact version, so it is also the name of the matching kmod feed.
+kernel_package_version() {
+	local manager version
+
+	manager="$(package_manager 2>/dev/null || true)"
+	case "$manager" in
+		opkg)
+			version="$(opkg status kernel 2>/dev/null | awk '/^Version:/ { print $2; exit }' || true)"
+			;;
+		apk)
+			version="$(apk list --installed kernel 2>/dev/null | awk 'NR == 1 { print $1 }' || true)"
+			version="${version#kernel-}"
+			;;
+	esac
+
+	[ -n "$version" ] || return 1
+	printf '%s' "$version"
+}
+
+# A kernel module is only loadable when the .ko file shipped for the running
+# kernel release is present on disk.
+module_file_present() {
+	local release
+
+	release="$(kernel_release)"
+	[ -n "$release" ] || return 1
+	[ -e "/lib/modules/$release/$1.ko" ] && return 0
+	find "/lib/modules/$release" -name "$1.ko" -print 2>/dev/null | grep -q .
+}
+
 normalize_plugin_version() {
 	local version="${1:-}"
 

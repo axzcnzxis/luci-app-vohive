@@ -6,7 +6,7 @@ on:
       plugin_version:
         description: LuCI plugin release tag
         required: true
-        default: v0.1.21
+        default: v0.1.22
       core_version:
         description: VoHive core release tag
         required: true
@@ -21,7 +21,7 @@ on:
 
 env:
   TZ: Asia/Shanghai
-  PLUGIN_VERSION: ${{ github.event.inputs.plugin_version || github.ref_name || 'v0.1.21' }}
+  PLUGIN_VERSION: ${{ github.event.inputs.plugin_version || github.ref_name || 'v0.1.22' }}
   CORE_VERSION: ${{ github.event.inputs.core_version || 'v1.5.4' }}
   CORE_REPO: ${{ github.event.inputs.core_repo || 'axzcnzxis/luci-app-vohive' }}
 

@@ -52,6 +52,24 @@ dep_value() {
 	fi
 }
 
+# Report the real state: a module can be present on disk without the package
+# database knowing about it (manual copy, preinstalled firmware, side-loaded ipk).
+serial_driver_state() {
+	if pkg_installed kmod-usb-serial || module_file_present usbserial; then
+		printf 'true'
+	else
+		printf 'false'
+	fi
+}
+
+option_driver_state() {
+	if pkg_installed kmod-usb-serial-option || module_file_present option; then
+		printf 'true'
+	else
+		printf 'false'
+	fi
+}
+
 has_cmd() {
 	command -v "$1" >/dev/null 2>&1
 }
@@ -68,6 +86,50 @@ run_timeout() {
 	fi
 }
 
+download_file() {
+	local url="$1"
+	local output="$2"
+
+	if has_cmd curl; then
+		curl -fL --connect-timeout 20 --retry 2 -o "$output" "$url" >/dev/null 2>&1
+	elif has_cmd uclient-fetch; then
+		uclient-fetch -q -O "$output" "$url" >/dev/null 2>&1
+	elif has_cmd wget; then
+		wget -q -O "$output" "$url" >/dev/null 2>&1
+	else
+		return 1
+	fi
+}
+
+# Extract one field of one package stanza from an opkg/apk Packages index.
+feed_package_field() {
+	local index="$1"
+	local package="$2"
+	local field="$3"
+
+	awk -v pkg="$package" -v field="$field" '
+		BEGIN { RS = ""; FS = "\n" }
+		{
+			name = ""
+			for (i = 1; i <= NF; i++) {
+				if ($i ~ /^Package: /) {
+					name = substr($i, 10)
+					continue
+				}
+				if (name == pkg && $i ~ ("^" field ": ")) {
+					print substr($i, length(field) + 3)
+					exit
+				}
+			}
+		}
+	' "$index"
+}
+
+file_sha256() {
+	has_cmd sha256sum || return 1
+	sha256sum "$1" 2>/dev/null | awk '{ print $1 }'
+}
+
 task_enabled() {
 	[ -n "${VOHIVE_TASK_ID:-}" ] && [ -n "${VOHIVE_TASK_TYPE:-}" ] && [ -f /usr/share/vohive/task_lib.sh ]
 }
@@ -82,6 +144,22 @@ task_progress() {
 		task_log "$VOHIVE_TASK_ID" "$message"
 		task_write_status "$VOHIVE_TASK_ID" "$VOHIVE_TASK_TYPE" "running" "$stage" "$message" "" 0 0 0 0
 	fi
+}
+
+# Ordered by dependency: option depends on wwan, wwan depends on usbserial.
+KMOD_SERIAL_PACKAGES="kmod-usb-serial kmod-usb-serial-wwan kmod-usb-serial-option"
+
+serial_modules_present() {
+	module_file_present usbserial &&
+		module_file_present usb_wwan &&
+		module_file_present option
+}
+
+load_serial_modules() {
+	modprobe usbserial 2>/dev/null || true
+	modprobe usb_wwan 2>/dev/null || true
+	modprobe option 2>/dev/null || true
+	prepare_serial_driver
 }
 
 bind_option_id() {
@@ -603,8 +681,10 @@ probe_port_json() {
 
 status_json() {
 	printf '{"ok":true,'
-	printf '"serial_driver_installed":%s,' "$(dep_value kmod-usb-serial)"
-	printf '"option_driver_installed":%s,' "$(dep_value kmod-usb-serial-option)"
+	printf '"kernel_version":"%s",' "$(json_escape "$(kernel_release)")"
+	printf '"kernel_package_version":"%s",' "$(json_escape "$(kernel_package_version 2>/dev/null || true)")"
+	printf '"serial_driver_installed":%s,' "$(serial_driver_state)"
+	printf '"option_driver_installed":%s,' "$(option_driver_state)"
 	printf '"socat_installed":%s,' "$(dep_value socat)"
 	printf '"stty_available":%s,' "$(has_cmd stty && printf true || printf false)"
 	printf '"timeout_available":%s' "$(has_timeout && printf true || printf false)"
@@ -616,8 +696,10 @@ probe_json() {
 
 	prepare_serial_driver
 	printf '{"ok":true,'
-	printf '"serial_driver_installed":%s,' "$(dep_value kmod-usb-serial)"
-	printf '"option_driver_installed":%s,' "$(dep_value kmod-usb-serial-option)"
+	printf '"kernel_version":"%s",' "$(json_escape "$(kernel_release)")"
+	printf '"kernel_package_version":"%s",' "$(json_escape "$(kernel_package_version 2>/dev/null || true)")"
+	printf '"serial_driver_installed":%s,' "$(serial_driver_state)"
+	printf '"option_driver_installed":%s,' "$(option_driver_state)"
 	printf '"socat_installed":%s,' "$(dep_value socat)"
 	printf '"stty_available":%s,' "$(has_cmd stty && printf true || printf false)"
 	printf '"timeout_available":%s,' "$(has_timeout && printf true || printf false)"
@@ -668,6 +750,145 @@ install_packages() {
 	}
 
 	printf '{"ok":true,"message":"安装完成","output":"%s"}\n' "$(json_escape "$output")"
+}
+
+# Candidate kmod feeds. The default mirrors the builder layout used by
+# custom x86_64 images whose kernel is newer than the release the feeds point
+# at; {kernel} expands to the installed kernel package version.
+kmod_feed_candidates() {
+	local custom
+
+	custom="$(uci_get kmod_feed_base '')"
+	[ -n "$custom" ] && printf '%s\n' "$custom"
+	printf '%s\n' 'https://raw.githubusercontent.com/sbwml/openwrt_core2/x86_64/{kernel}'
+}
+
+expand_kmod_feed() {
+	printf '%s' "$1" | sed "s|{kernel}|$2|g"
+}
+
+# Download the three kmod ipk files from a kernel-matched feed, verify them
+# against the feed index and install them locally. Local ipk installs do not
+# depend on the feed being configured in /etc/opkg, so this works even when the
+# device only has the stock release feeds.
+install_kmods_from_feed() {
+	local base="$1"
+	local workdir="$2"
+	local index="$workdir/Packages"
+	local package filename expected file actual
+
+	download_file "$base/Packages" "$index" || {
+		printf '无法下载模块索引: %s/Packages\n' "$base"
+		return 1
+	}
+	[ -s "$index" ] || {
+		printf '模块索引为空: %s/Packages\n' "$base"
+		return 1
+	}
+
+	for package in $KMOD_SERIAL_PACKAGES; do
+		filename="$(feed_package_field "$index" "$package" Filename)"
+		if [ -z "$filename" ]; then
+			printf '模块源中没有 %s\n' "$package"
+			return 1
+		fi
+		expected="$(feed_package_field "$index" "$package" SHA256sum)"
+		file="$workdir/$filename"
+		if ! download_file "$base/$filename" "$file"; then
+			printf '下载失败: %s\n' "$filename"
+			return 1
+		fi
+		if [ -n "$expected" ]; then
+			actual="$(file_sha256 "$file" || true)"
+			if [ "$actual" != "$expected" ]; then
+				printf '校验失败: %s\n' "$filename"
+				return 1
+			fi
+		fi
+		if ! opkg install "$file" 2>&1; then
+			printf '安装失败: %s\n' "$filename"
+			return 1
+		fi
+	done
+
+	return 0
+}
+
+install_serial_drivers_json() {
+	local kernel version manager output native_output base workdir
+
+	kernel="$(kernel_release)"
+	output="当前内核: $kernel\n"
+	workdir="/tmp/vohive/kmod.$$"
+	mkdir -p "$workdir"
+
+	if serial_modules_present; then
+		load_serial_modules
+		rm -rf "$workdir"
+		output="${output}串口模块已存在，已直接加载，无需联网安装。\n"
+		printf '{"ok":true,"message":"串口驱动已就绪","output":"%s"}\n' "$(json_escape "$output")"
+		return 0
+	fi
+
+	manager="$(package_manager 2>/dev/null || true)"
+	output="${output}尝试从当前软件源安装: $KMOD_SERIAL_PACKAGES\n"
+	case "$manager" in
+		opkg)
+			native_output="$(opkg update 2>&1; opkg install $KMOD_SERIAL_PACKAGES 2>&1)"
+			;;
+		apk)
+			native_output="$(apk update 2>&1; apk add $KMOD_SERIAL_PACKAGES 2>&1)"
+			;;
+		*)
+			native_output="未找到 opkg 或 apk"
+			;;
+	esac
+	output="${output}${native_output}\n"
+
+	if serial_modules_present; then
+		load_serial_modules
+		rm -rf "$workdir"
+		output="${output}安装完成。\n"
+		printf '{"ok":true,"message":"串口驱动安装完成","output":"%s"}\n' "$(json_escape "$output")"
+		return 0
+	fi
+
+	if [ "$manager" != opkg ]; then
+		rm -rf "$workdir"
+		output="${output}当前源没有与内核 $kernel 匹配的串口模块，且包管理器 ${manager:-未知} 不支持模块源回退。\n"
+		printf '{"ok":false,"message":"安装失败：当前源没有匹配的串口驱动","output":"%s"}\n' "$(json_escape "$output")"
+		exit 1
+	fi
+
+	version="$(kernel_package_version 2>/dev/null || true)"
+	if [ -z "$version" ]; then
+		rm -rf "$workdir"
+		output="${output}当前源没有与内核 $kernel 匹配的串口模块，也无法确定内核软件包版本。\n"
+		printf '{"ok":false,"message":"无法确定内核版本，安装失败","output":"%s"}\n' "$(json_escape "$output")"
+		exit 1
+	fi
+
+	output="${output}当前源没有与内核匹配的模块，改用与内核版本 $version 对应的模块源。\n"
+	for base in $(kmod_feed_candidates); do
+		base="$(expand_kmod_feed "$base" "$version")"
+		output="${output}模块源: $base\n"
+		install_kmods_from_feed "$base" "$workdir" > "$workdir/log" 2>&1 || true
+		output="${output}$(cat "$workdir/log" 2>/dev/null || true)"
+		serial_modules_present && break
+	done
+
+	rm -rf "$workdir"
+
+	if serial_modules_present; then
+		load_serial_modules
+		output="${output}安装完成。\n"
+		printf '{"ok":true,"message":"串口驱动安装完成","output":"%s"}\n' "$(json_escape "$output")"
+		return 0
+	fi
+
+	output="${output}未找到与内核 $kernel 匹配的串口模块。\n可在 /etc/config/vohive 中通过 kmod_feed_base 指定模块源，地址中的 {kernel} 会替换为内核软件包版本。\n"
+	printf '{"ok":false,"message":"安装失败：没有匹配当前内核的串口驱动","output":"%s"}\n' "$(json_escape "$output")"
+	exit 1
 }
 
 target_command() {
@@ -854,7 +1075,7 @@ case "$ACTION" in
 		probe_json
 		;;
 	install_serial_drivers)
-		install_packages 'kmod-usb-serial kmod-usb-serial-option'
+		install_serial_drivers_json
 		;;
 	install_socat)
 		install_packages 'socat'

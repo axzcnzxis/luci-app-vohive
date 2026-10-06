@@ -756,10 +756,11 @@ return view.extend({
 				this.renderDependencyState('kmod-usb-serial', data.serial_driver_installed),
 				this.renderDependencyState('kmod-usb-serial-option', data.option_driver_installed),
 				this.renderDependencyState('socat', data.socat_installed),
+				E('span', {}, _('内核版本: %s').format(data.kernel_version || _('未知'))),
 				data.serial_driver_installed && data.option_driver_installed ? '' : E('button', {
 					'class': 'btn cbi-button cbi-button-action',
 					'click': ui.createHandlerFn(this, function() {
-						return this.runDeviceTool(devicePane, [ 'install_serial_drivers' ], _('确认安装串口驱动吗？\n\n这会使用当前系统的 opkg 或 apk 安装 kmod-usb-serial 和 kmod-usb-serial-option。\n内核模块包需要匹配当前固件内核版本。'));
+						return this.runDeviceTool(devicePane, [ 'install_serial_drivers' ], _('确认安装串口驱动吗？\n\n会先尝试从当前软件源安装 kmod-usb-serial、kmod-usb-serial-wwan 和 kmod-usb-serial-option；如果当前源没有与内核匹配的模块，会自动改用与当前内核版本匹配的模块源下载安装。\n需要可用网络。'));
 					})
 				}, _('安装串口驱动')),
 				data.socat_installed ? '' : E('button', {
